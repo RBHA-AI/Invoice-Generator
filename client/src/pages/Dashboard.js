@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { FileText, Users, IndianRupee, TrendingUp } from 'lucide-react';
 
 function Dashboard() {
@@ -135,7 +136,9 @@ function Dashboard() {
                 recentInvoices.map(invoice => (
                   <tr key={invoice.id}>
                     <td style={{ fontFamily: 'monospace', fontWeight: 500 }}>
-                      {invoice.invoiceNumber}
+                      <Link to={`/invoice/${invoice.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
+                        {invoice.invoiceNumber}
+                      </Link>
                     </td>
                     <td>{invoice.clientName}</td>
                     <td>{formatDate(invoice.invoiceDate)}</td>

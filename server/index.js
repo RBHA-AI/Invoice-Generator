@@ -35,9 +35,24 @@ try {
 try {
   db.prepare("ALTER TABLE invoices ADD COLUMN taxType TEXT").run();
 } catch (e) {}
+try {
+  db.prepare("ALTER TABLE invoices ADD COLUMN companyId TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE invoice_items ADD COLUMN detailedDescription TEXT").run();
+} catch (e) {}
 
 // Create tables
 db.exec(`
+  CREATE TABLE IF NOT EXISTS companies (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    address TEXT,
+    gstin TEXT,
+    msmeNumber TEXT,
+    createdAt TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS clients (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -57,6 +72,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     invoiceNumber TEXT UNIQUE NOT NULL,
     clientId TEXT NOT NULL,
+    companyId TEXT,
     invoiceDate TEXT NOT NULL,
     dueDate TEXT NOT NULL,
     placeOfSupply TEXT,
@@ -68,13 +84,15 @@ db.exec(`
     total REAL,
     status TEXT DEFAULT 'draft',
     createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (clientId) REFERENCES clients(id)
+    FOREIGN KEY (clientId) REFERENCES clients(id),
+    FOREIGN KEY (companyId) REFERENCES companies(id)
   );
 
   CREATE TABLE IF NOT EXISTS invoice_items (
     id TEXT PRIMARY KEY,
     invoiceId TEXT NOT NULL,
     description TEXT NOT NULL,
+    detailedDescription TEXT,
     hsnSac TEXT,
     quantity REAL DEFAULT 1,
     rate REAL NOT NULL,
@@ -84,6 +102,81 @@ db.exec(`
     FOREIGN KEY (invoiceId) REFERENCES invoices(id) ON DELETE CASCADE
   );
 `);
+
+// ==================== COMPANY ROUTES ====================
+
+// Get all companies
+app.get('/api/companies', (req, res) => {
+  try {
+    const companies = db.prepare('SELECT * FROM companies ORDER BY createdAt DESC').all();
+    res.json(companies);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single company
+app.get('/api/companies/:id', (req, res) => {
+  try {
+    const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id);
+    if (!company) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
+    res.json(company);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create company
+app.post('/api/companies', (req, res) => {
+  try {
+    const { name, address, gstin, msmeNumber } = req.body;
+    const id = uuidv4();
+    
+    const stmt = db.prepare(`
+      INSERT INTO companies (id, name, address, gstin, msmeNumber)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    
+    stmt.run(id, name, address || null, gstin || null, msmeNumber || null);
+    
+    const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(id);
+    res.status(201).json(company);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update company
+app.put('/api/companies/:id', (req, res) => {
+  try {
+    const { name, address, gstin, msmeNumber } = req.body;
+
+    const stmt = db.prepare(`
+      UPDATE companies 
+      SET name = ?, address = ?, gstin = ?, msmeNumber = ?
+      WHERE id = ?
+    `);
+
+    stmt.run(name, address || null, gstin || null, msmeNumber || null, req.params.id);
+    
+    const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id);
+    res.json(company);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete company
+app.delete('/api/companies/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM companies WHERE id = ?').run(req.params.id);
+    res.json({ message: 'Company deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ==================== CLIENT ROUTES ====================
 
@@ -244,25 +337,25 @@ app.get('/api/invoices/generate-number', (req, res) => {
 // Create invoice
 app.post('/api/invoices', (req, res) => {
   try {
-    const { invoiceNumber, clientId, invoiceDate, dueDate, placeOfSupply, items, subtotal, cgst, sgst, igst, taxType, total, status } = req.body;
+    const { invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, items, subtotal, cgst, sgst, igst, taxType, total, status } = req.body;
     const invoiceId = uuidv4();
     
     // Insert invoice
     const invoiceStmt = db.prepare(`
-      INSERT INTO invoices (id, invoiceNumber, clientId, invoiceDate, dueDate, placeOfSupply, subtotal, cgst, sgst, igst, taxType, total, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoices (id, invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, subtotal, cgst, sgst, igst, taxType, total, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
-    invoiceStmt.run(invoiceId, invoiceNumber, clientId, invoiceDate, dueDate, placeOfSupply, subtotal, cgst, sgst, igst || 0, taxType || null, total, status || 'draft');
+    invoiceStmt.run(invoiceId, invoiceNumber, clientId, companyId || null, invoiceDate, dueDate, placeOfSupply, subtotal, cgst, sgst, igst || 0, taxType || null, total, status || 'draft');
     
     // Insert items
     const itemStmt = db.prepare(`
-      INSERT INTO invoice_items (id, invoiceId, description, hsnSac, quantity, rate, cgstPercent, sgstPercent, amount)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoice_items (id, invoiceId, description, detailedDescription, hsnSac, quantity, rate, cgstPercent, sgstPercent, amount)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
     items.forEach(item => {
-      itemStmt.run(uuidv4(), invoiceId, item.description, item.hsnSac, item.quantity, item.rate, item.cgstPercent, item.sgstPercent, item.amount);
+      itemStmt.run(uuidv4(), invoiceId, item.description, item.detailedDescription || null, item.hsnSac, item.quantity, item.rate, item.cgstPercent, item.sgstPercent, item.amount);
     });
     
     const invoice = db.prepare(`

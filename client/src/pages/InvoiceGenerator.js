@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2, Download, Eye } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -6,15 +7,18 @@ import './InvoiceGenerator.css';
 
 function InvoiceGenerator() {
   const [clients, setClients] = useState([]);
+  const [companies, setCompanies] = useState([]);
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [formData, setFormData] = useState({
     clientId: '',
+    companyId: '',
     invoiceDate: new Date().toISOString().split('T')[0],
     dueDate: new Date().toISOString().split('T')[0],
     placeOfSupply: 'Delhi (07)',
     items: [
       {
         description: '',
+        detailedDescription: '',
         hsnSac: '',
         quantity: 1,
         rate: 0,
@@ -25,7 +29,9 @@ function InvoiceGenerator() {
   });
   
   const [selectedClient, setSelectedClient] = useState(null);
+  const [selectedCompany, setSelectedCompany] = useState(null);
   const invoicePreviewRef = useRef(null);
+  const navigate = useNavigate();
   const firmState = 'delhi';
   const computedSelectedClient = selectedClient || clients.find(c => c.id === formData.clientId) || null;
   const clientStateNormalized = (computedSelectedClient && computedSelectedClient.state) ? String(computedSelectedClient.state).toLowerCase() : '';
@@ -34,6 +40,7 @@ function InvoiceGenerator() {
 
   useEffect(() => {
     fetchClients();
+    fetchCompanies();
     generateInvoiceNumber();
   }, []);
   
@@ -50,6 +57,16 @@ function InvoiceGenerator() {
       setClients(data);
     } catch (error) {
       console.error('Error fetching clients:', error);
+    }
+  };
+
+  const fetchCompanies = async () => {
+    try {
+      const response = await fetch('/api/companies');
+      const data = await response.json();
+      setCompanies(data);
+    } catch (error) {
+      console.error('Error fetching companies:', error);
     }
   };
 
@@ -79,6 +96,13 @@ function InvoiceGenerator() {
     setSelectedClient(client);
   };
 
+  const handleCompanyChange = (e) => {
+    const companyId = e.target.value;
+    setFormData({ ...formData, companyId });
+    const company = companies.find(c => c.id === companyId);
+    setSelectedCompany(company);
+  };
+
   const handleInputChange = (e) => {
     setFormData({
       ...formData,
@@ -99,6 +123,7 @@ function InvoiceGenerator() {
         ...formData.items,
         {
           description: '',
+          detailedDescription: '',
           hsnSac: '',
           quantity: 1,
           rate: 0,
@@ -115,7 +140,9 @@ function InvoiceGenerator() {
   };
 
   const calculateItemAmount = (item) => {
-    return item.quantity * item.rate;
+    const qty = parseFloat(item.quantity) || 0;
+    const rate = parseFloat(item.rate) || 0;
+    return qty * rate;
   };
 
   const calculateItemCGST = (item) => {
@@ -196,9 +223,42 @@ function InvoiceGenerator() {
       return;
     }
 
+    // Check for duplicate invoice number and offer to auto-generate
+    try {
+      const allRes = await fetch('/api/invoices');
+      if (allRes.ok) {
+        const allInvoices = await allRes.json();
+        const exists = allInvoices.find(inv => String(inv.invoiceNumber) === String(invoiceNumber));
+        if (exists) {
+          const shouldGen = window.confirm('Invoice number already exists. Click OK to auto-generate a new invoice number, Cancel to edit.');
+          if (shouldGen) {
+            try {
+              const genRes = await fetch('/api/invoices/generate-number');
+              if (genRes.ok) {
+                const genJson = await genRes.json();
+                if (genJson && genJson.invoiceNumber) {
+                  setInvoiceNumber(genJson.invoiceNumber);
+                }
+              }
+            } catch (e) {
+              console.error('Error generating new invoice number:', e);
+              alert('Unable to generate a new invoice number automatically. Please edit the invoice number manually.');
+              return;
+            }
+          } else {
+            return; // let user edit the invoice number
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error checking existing invoices:', e);
+      // continue; server-side will still enforce uniqueness
+    }
+
     const invoiceData = {
       invoiceNumber,
       clientId: formData.clientId,
+      companyId: formData.companyId,
       invoiceDate: formData.invoiceDate,
       dueDate: formData.dueDate,
       placeOfSupply: formData.placeOfSupply,
@@ -222,10 +282,22 @@ function InvoiceGenerator() {
 
       if (response.ok) {
         alert('Invoice saved successfully!');
+        navigate('/');
+        return;
       }
+
+      // Show server-side error message when available
+      let errMsg = response.statusText;
+      try {
+        const errJson = await response.json();
+        if (errJson && errJson.error) errMsg = errJson.error;
+      } catch (e) {
+        // ignore JSON parse errors
+      }
+      alert('Error saving invoice: ' + errMsg);
     } catch (error) {
       console.error('Error saving invoice:', error);
-      alert('Error saving invoice');
+      alert('Error saving invoice: ' + (error.message || error));
     }
   };
 
@@ -238,23 +310,46 @@ function InvoiceGenerator() {
     const element = invoicePreviewRef.current;
     
     try {
+      // Get full dimensions of the invoice content
+      const fullWidth = element.scrollWidth || element.offsetWidth;
+      const fullHeight = element.scrollHeight || element.offsetHeight;
+
       const canvas = await html2canvas(element, {
-        scale: 3,
+        scale: 2,
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
-        width: element.scrollWidth,
-        height: element.scrollHeight
+        width: fullWidth,
+        height: fullHeight,
+        allowTaint: true
       });
       
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
+      
+      // Calculate dimensions to fit on A4
       const imgWidth = pdfWidth;
       const imgHeight = (canvas.height * pdfWidth) / canvas.width;
       
-      pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+      // Handle multi-page PDFs
+      let position = 0;
+      if (imgHeight > pdfHeight) {
+        // Multiple pages needed
+        let heightLeft = imgHeight;
+        while (heightLeft > 0) {
+          pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+          heightLeft -= pdfHeight;
+          position -= pdfHeight;
+          if (heightLeft > 0) {
+            pdf.addPage();
+          }
+        }
+      } else {
+        // Single page
+        pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+      }
       
       const safeInvoiceNumber = String(invoiceNumber).replace(/[^\w-]+/g, '-');
       const filename = `invoice-${safeInvoiceNumber}.pdf`;
@@ -284,9 +379,25 @@ function InvoiceGenerator() {
                 type="text"
                 className="form-input"
                 value={invoiceNumber}
-                readOnly
+                onChange={(e) => setInvoiceNumber(e.target.value)}
                 style={{ background: '#f8f9fa', fontFamily: 'monospace', fontWeight: '600' }}
               />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Company <span className="required">*</span></label>
+              <select
+                className="form-select"
+                value={formData.companyId}
+                onChange={handleCompanyChange}
+              >
+                <option value="">Select a company</option>
+                {companies.map(company => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="form-group">
@@ -378,6 +489,17 @@ function InvoiceGenerator() {
                   />
                 </div>
 
+                <div className="form-group">
+                  <label className="form-label">Detailed Description</label>
+                  <textarea
+                    className="form-textarea"
+                    value={item.detailedDescription}
+                    onChange={(e) => handleItemChange(index, 'detailedDescription', e.target.value)}
+                    placeholder="Add detailed description for this item (optional)"
+                    style={{ minHeight: '80px', resize: 'vertical' }}
+                  />
+                </div>
+
                 <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
                   <div className="form-group">
                     <label className="form-label">HSN/SAC</label>
@@ -396,22 +518,22 @@ function InvoiceGenerator() {
                       type="number"
                       className="form-input"
                       value={item.quantity}
-                      onChange={(e) => handleItemChange(index, 'quantity', parseFloat(e.target.value) || 0)}
+                      onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
                       min="0"
-                      step="0.01"
+                      step="1"
                     />
                   </div>
                 </div>
 
-                <div className="form-group">
+                  <div className="form-group">
                   <label className="form-label">Rate (₹)</label>
                   <input
                     type="number"
                     className="form-input"
-                    value={item.rate}
-                    onChange={(e) => handleItemChange(index, 'rate', parseFloat(e.target.value) || 0)}
-                    min="0"
-                    step="0.01"
+                      value={item.rate}
+                      onChange={(e) => handleItemChange(index, 'rate', e.target.value)}
+                      min="0"
+                      step="0.01"
                   />
                 </div>
 
@@ -514,14 +636,31 @@ function InvoiceGenerator() {
                   <img src="/logo.png" alt="CA India Logo" className="invoice-logo" />
                 </div>
                 <div className="header-center">
-                  <h1 className="firm-title">R Bhargava & Associates</h1>
-                  <p className="firm-address">
-                    247-B, MIG FLATS<br />
-                    RAJOURI GARDEN<br />
-                    NEW DELHI Delhi 110027<br />
-                    India
-                  </p>
-                  <p className="firm-gstin">GSTIN 07AAQFR3892K1ZE</p>
+                  {selectedCompany ? (
+                    <>
+                      <h1 className="firm-title">{selectedCompany.name}</h1>
+                      {selectedCompany.address && (
+                        <p className="firm-address">{selectedCompany.address}</p>
+                      )}
+                      {selectedCompany.gstin && (
+                        <p className="firm-gstin">GSTIN {selectedCompany.gstin}</p>
+                      )}
+                      {selectedCompany.msmeNumber && (
+                        <p className="firm-gstin">MSME {selectedCompany.msmeNumber}</p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <h1 className="firm-title">R Bhargava & Associates</h1>
+                      <p className="firm-address">
+                        247-B, MIG FLATS<br />
+                        RAJOURI GARDEN<br />
+                        NEW DELHI Delhi 110027<br />
+                        India
+                      </p>
+                      <p className="firm-gstin">GSTIN 07AAQFR3892K1ZE</p>
+                    </>
+                  )}
                 </div>
                 <div className="header-right">
                   <h2 className="tax-invoice-label">TAX INVOICE</h2>
@@ -607,10 +746,17 @@ function InvoiceGenerator() {
                   {formData.items.map((item, index) => (
                     <tr key={index}>
                       <td style={{ textAlign: 'center', fontWeight: 'bold' }}>{index + 1}</td>
-                      <td>{item.description || '-'}</td>
+                      <td>
+                        <div>{item.description || '-'}</div>
+                        {item.detailedDescription && (
+                          <div style={{ fontSize: '0.85em', color: '#666', marginTop: '4px', fontStyle: 'italic' }}>
+                            {item.detailedDescription}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ textAlign: 'center' }}>{item.hsnSac || '-'}</td>
-                      <td style={{ textAlign: 'center' }}>{item.quantity.toFixed(2)}</td>
-                      <td style={{ textAlign: 'right' }}>{formatCurrency(item.rate)}</td>
+                      <td style={{ textAlign: 'center' }}>{(parseFloat(item.quantity) || 0).toFixed(2)}</td>
+                      <td style={{ textAlign: 'right' }}>{formatCurrency(parseFloat(item.rate) || 0)}</td>
                       {isInterState ? (
                         <>
                           <td style={{ textAlign: 'right' }}>
