@@ -35,6 +35,7 @@ const upload = multer({
 
 // Middleware
 app.use(cors());
+app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '../client/build')));
 app.use('/uploads', express.static('./server/uploads'));
@@ -361,28 +362,6 @@ app.get('/api/invoices', (req, res) => {
   }
 });
 
-// Get single invoice with items
-app.get('/api/invoices/:id', (req, res) => {
-  try {
-    const invoice = db.prepare(`
-      SELECT i.*, c.* 
-      FROM invoices i 
-      LEFT JOIN clients c ON i.clientId = c.id 
-      WHERE i.id = ?
-    `).get(req.params.id);
-    
-    if (!invoice) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-    
-    const items = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(req.params.id);
-    
-    res.json({ ...invoice, items });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Generate next invoice number
 app.get('/api/invoices/generate-number', (req, res) => {
   try {
@@ -421,6 +400,28 @@ app.get('/api/invoices/generate-number', (req, res) => {
     res.json({ invoiceNumber });
   } catch (error) {
     console.error('Error generating invoice number:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single invoice with items
+app.get('/api/invoices/:id', (req, res) => {
+  try {
+    const invoice = db.prepare(`
+      SELECT i.*, c.* 
+      FROM invoices i 
+      LEFT JOIN clients c ON i.clientId = c.id 
+      WHERE i.id = ?
+    `).get(req.params.id);
+    
+    if (!invoice) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    
+    const items = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(req.params.id);
+    
+    res.json({ ...invoice, items });
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });

@@ -228,6 +228,11 @@ function InvoiceGenerator() {
       return;
     }
 
+    // ensure we have an invoice number before proceeding
+    if (!invoiceNumber) {
+      await generateInvoiceNumber();
+    }
+
     // Check for duplicate invoice number and offer to auto-generate
     try {
       const allRes = await fetch('/api/invoices');
@@ -282,6 +287,12 @@ function InvoiceGenerator() {
       total: calculateTotal(),
       status: 'draft'
     };
+
+    console.log('Preparing to save invoice', invoiceData);
+    if (!invoiceNumber) {
+      alert('Cannot save invoice: invoice number is missing');
+      return;
+    }
 
     try {
       const response = await fetch('/api/invoices', {
