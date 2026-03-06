@@ -633,7 +633,18 @@ function InvoiceGenerator() {
               {/* Header with Logo, Firm Details, and TAX INVOICE */}
               <div className="invoice-header">
                 <div className="header-left">
-                  <img src="/logo.png" alt="CA India Logo" className="invoice-logo" />
+                  {selectedCompany && selectedCompany.logo ? (
+                    <img 
+                      src={`http://localhost:5000${selectedCompany.logo}`} 
+                      alt={`${selectedCompany.name} Logo`} 
+                      className="invoice-logo"
+                      onError={(e) => {
+                        e.target.src = '/logo.png';
+                      }}
+                    />
+                  ) : (
+                    <img src="/logo.png" alt="CA India Logo" className="invoice-logo" />
+                  )}
                 </div>
                 <div className="header-center">
                   {selectedCompany ? (
@@ -854,7 +865,9 @@ function InvoiceGenerator() {
                   {/* Signature Box */}
                   <div className="signature-box">
                     <div className="signature-inner">
-                      <div className="signature-top">FOR R BHARGAVA & ASSOCIATES</div>
+                      <div className="signature-top">
+                        FOR {selectedCompany ? selectedCompany.name.toUpperCase() : 'R BHARGAVA & ASSOCIATES'}
+                      </div>
                       <div className="signature-middle">
                         {/* Empty space for physical signature */}
                       </div>

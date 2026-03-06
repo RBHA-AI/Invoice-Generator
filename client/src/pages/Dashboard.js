@@ -10,6 +10,7 @@ function Dashboard() {
     pendingAmount: 0
   });
   const [recentInvoices, setRecentInvoices] = useState([]);
+  const [companies, setCompanies] = useState([]);
 
   useEffect(() => {
     fetchDashboardData();
@@ -17,13 +18,15 @@ function Dashboard() {
 
   const fetchDashboardData = async () => {
     try {
-      const [clientsRes, invoicesRes] = await Promise.all([
+      const [clientsRes, invoicesRes, companiesRes] = await Promise.all([
         fetch('/api/clients'),
-        fetch('/api/invoices')
+        fetch('/api/invoices'),
+        fetch('/api/companies')
       ]);
       
       const clients = await clientsRes.json();
       const invoices = await invoicesRes.json();
+      const companiesData = await companiesRes.json();
       
       const totalRevenue = invoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
       const pendingAmount = invoices
@@ -38,6 +41,7 @@ function Dashboard() {
       });
       
       setRecentInvoices(invoices.slice(0, 5));
+      setCompanies(companiesData.slice(0, 5)); // Show recent 5 companies
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
     }
@@ -160,6 +164,74 @@ function Dashboard() {
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+          <h3 style={{ 
+            fontFamily: 'Playfair Display, serif', 
+            fontSize: '1.5rem', 
+            color: 'var(--primary)',
+            margin: 0
+          }}>
+            Companies
+          </h3>
+          <Link to="/companies" className="btn btn-outline" style={{ fontSize: '0.875rem', padding: '0.5rem 1rem' }}>
+            View All
+          </Link>
+        </div>
+        
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '1rem' }}>
+          {companies.length === 0 ? (
+            <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '2rem', color: 'var(--text-light)' }}>
+              No companies yet. <Link to="/companies" style={{ color: 'var(--primary)' }}>Add your first company</Link>.
+            </div>
+          ) : (
+            companies.map(company => (
+              <div key={company.id} style={{ 
+                border: '1px solid var(--border)', 
+                borderRadius: '8px', 
+                padding: '1rem', 
+                textAlign: 'center',
+                background: 'var(--card-bg)'
+              }}>
+                {company.logo ? (
+                  <>
+                    <img 
+                      src={`http://localhost:5000${company.logo}`} 
+                      alt={`${company.name} logo`} 
+                      style={{ width: '60px', height: '60px', objectFit: 'contain', marginBottom: '0.5rem' }}
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                        e.target.nextSibling.style.display = 'block';
+                      }}
+                    />
+                    <div style={{ display: 'none', width: '60px', height: '60px', backgroundColor: '#f0f0f0', alignItems: 'center', justifyContent: 'center', borderRadius: '4px', margin: '0 auto 0.5rem' }}>
+                      <span style={{ fontSize: '10px', color: '#666' }}>No Logo</span>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ 
+                    width: '60px', 
+                    height: '60px', 
+                    backgroundColor: '#f0f0f0', 
+                    display: 'flex', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    borderRadius: '4px', 
+                    margin: '0 auto 0.5rem'
+                  }}>
+                    <span style={{ fontSize: '10px', color: '#666' }}>No Logo</span>
+                  </div>
+                )}
+                <h4 style={{ fontSize: '1rem', margin: '0 0 0.25rem 0', fontWeight: 600 }}>{company.name}</h4>
+                <p style={{ fontSize: '0.875rem', color: 'var(--text-light)', margin: 0 }}>
+                  {company.gstin || 'No GSTIN'}
+                </p>
+              </div>
+            ))
+          )}
         </div>
       </div>
     </div>

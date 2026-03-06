@@ -4,14 +4,39 @@ const bodyParser = require('body-parser');
 const Database = require('better-sqlite3');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
+const multer = require('multer');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Configure multer for logo uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, './server/uploads/logos');
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
+  }
+});
+const upload = multer({ 
+  storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  }
+});
+
 // Middleware
-app.use(cors());
-app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '../client/build')));
+app.use('/uploads', express.static('./server/uploads'));
 
 // Initialize SQLite Database
 const db = new Database('invoices.db');
@@ -39,7 +64,7 @@ try {
   db.prepare("ALTER TABLE invoices ADD COLUMN companyId TEXT").run();
 } catch (e) {}
 try {
-  db.prepare("ALTER TABLE invoice_items ADD COLUMN detailedDescription TEXT").run();
+  db.prepare("ALTER TABLE companies ADD COLUMN logo TEXT").run();
 } catch (e) {}
 
 // Create tables
@@ -50,6 +75,7 @@ db.exec(`
     address TEXT,
     gstin TEXT,
     msmeNumber TEXT,
+    logo TEXT,
     createdAt TEXT DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -130,42 +156,65 @@ app.get('/api/companies/:id', (req, res) => {
 
 // Create company
 app.post('/api/companies', (req, res) => {
-  try {
-    const { name, address, gstin, msmeNumber } = req.body;
-    const id = uuidv4();
+  upload.single('logo')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
     
-    const stmt = db.prepare(`
-      INSERT INTO companies (id, name, address, gstin, msmeNumber)
-      VALUES (?, ?, ?, ?, ?)
-    `);
-    
-    stmt.run(id, name, address || null, gstin || null, msmeNumber || null);
-    
-    const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(id);
-    res.status(201).json(company);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+    try {
+      const { name, address, gstin, msmeNumber } = req.body;
+      const logo = req.file ? `/uploads/logos/${req.file.filename}` : null;
+      const id = uuidv4();
+      
+      const stmt = db.prepare(`
+        INSERT INTO companies (id, name, address, gstin, msmeNumber, logo)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      
+      stmt.run(id, name, address || null, gstin || null, msmeNumber || null, logo);
+      
+      const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(id);
+      res.status(201).json(company);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
 });
 
 // Update company
-app.put('/api/companies/:id', (req, res) => {
-  try {
-    const { name, address, gstin, msmeNumber } = req.body;
-
-    const stmt = db.prepare(`
-      UPDATE companies 
-      SET name = ?, address = ?, gstin = ?, msmeNumber = ?
-      WHERE id = ?
-    `);
-
-    stmt.run(name, address || null, gstin || null, msmeNumber || null, req.params.id);
+app.put('/api/companies/:id', (req, res, next) => {
+  upload.single('logo')(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ error: err.message });
+    }
     
-    const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id);
-    res.json(company);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+    try {
+      const { name, address, gstin, msmeNumber } = req.body;
+      const logo = req.file ? `/uploads/logos/${req.file.filename}` : undefined;
+
+      let stmt;
+      if (logo !== undefined) {
+        stmt = db.prepare(`
+          UPDATE companies 
+          SET name = ?, address = ?, gstin = ?, msmeNumber = ?, logo = ?
+          WHERE id = ?
+        `);
+        stmt.run(name, address || null, gstin || null, msmeNumber || null, logo, req.params.id);
+      } else {
+        stmt = db.prepare(`
+          UPDATE companies 
+          SET name = ?, address = ?, gstin = ?, msmeNumber = ?
+          WHERE id = ?
+        `);
+        stmt.run(name, address || null, gstin || null, msmeNumber || null, req.params.id);
+      }
+      
+      const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id);
+      res.json(company);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
 });
 
 // Delete company

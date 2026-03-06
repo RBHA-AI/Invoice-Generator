@@ -9,7 +9,8 @@ function Companies() {
     name: '',
     address: '',
     gstin: '',
-    msmeNumber: ''
+    msmeNumber: '',
+    logo: null
   });
 
   useEffect(() => {
@@ -36,15 +37,25 @@ function Companies() {
       
       const method = editingCompany ? 'PUT' : 'POST';
       
+      const formDataToSend = new FormData();
+      formDataToSend.append('name', formData.name);
+      formDataToSend.append('address', formData.address);
+      formDataToSend.append('gstin', formData.gstin);
+      formDataToSend.append('msmeNumber', formData.msmeNumber);
+      if (formData.logo) {
+        formDataToSend.append('logo', formData.logo);
+      }
+      
       const response = await fetch(url, {
         method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formData)
+        body: formDataToSend
       });
       
       if (response.ok) {
         fetchCompanies();
         closeModal();
+      } else {
+        console.error('Error updating company:', await response.text());
       }
     } catch (error) {
       console.error('Error saving company:', error);
@@ -69,7 +80,8 @@ function Companies() {
         name: company.name || '',
         address: company.address || '',
         gstin: company.gstin || '',
-        msmeNumber: company.msmeNumber || ''
+        msmeNumber: company.msmeNumber || '',
+        logo: null // Reset file input
       });
     } else {
       setEditingCompany(null);
@@ -77,7 +89,8 @@ function Companies() {
         name: '',
         address: '',
         gstin: '',
-        msmeNumber: ''
+        msmeNumber: '',
+        logo: null
       });
     }
     setShowModal(true);
@@ -90,7 +103,8 @@ function Companies() {
       name: '',
       address: '',
       gstin: '',
-      msmeNumber: ''
+      msmeNumber: '',
+      logo: null
     });
   };
 
@@ -98,6 +112,13 @@ function Companies() {
     setFormData({
       ...formData,
       [e.target.name]: e.target.value
+    });
+  };
+
+  const handleFileChange = (e) => {
+    setFormData({
+      ...formData,
+      logo: e.target.files[0]
     });
   };
 
@@ -119,6 +140,7 @@ function Companies() {
           <table className="table">
             <thead>
               <tr>
+                <th>Logo</th>
                 <th>Company Name</th>
                 <th>GSTIN</th>
                 <th>MSME Number</th>
@@ -129,13 +151,35 @@ function Companies() {
             <tbody>
               {companies.length === 0 ? (
                 <tr>
-                  <td colSpan="5" className="text-center" style={{ padding: '3rem', color: 'var(--text-light)' }}>
+                  <td colSpan="6" className="text-center" style={{ padding: '3rem', color: 'var(--text-light)' }}>
                     No companies found. Add your first company to get started.
                   </td>
                 </tr>
               ) : (
                 companies.map(company => (
                   <tr key={company.id}>
+                    <td>
+                      {company.logo ? (
+                        <>
+                          <img 
+                            src={`http://localhost:5000${company.logo}`} 
+                            alt={`${company.name} logo`} 
+                            style={{ width: '40px', height: '40px', objectFit: 'contain' }}
+                            onError={(e) => {
+                              e.target.style.display = 'none';
+                              e.target.nextSibling.style.display = 'block';
+                            }}
+                          />
+                          <div style={{ display: 'none', width: '40px', height: '40px', backgroundColor: '#f0f0f0', alignItems: 'center', justifyContent: 'center', borderRadius: '4px' }}>
+                            <span style={{ fontSize: '10px', color: '#666' }}>No Logo</span>
+                          </div>
+                        </>
+                      ) : (
+                        <div style={{ width: '40px', height: '40px', backgroundColor: '#f0f0f0', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '4px' }}>
+                          <span style={{ fontSize: '12px', color: '#666' }}>No Logo</span>
+                        </div>
+                      )}
+                    </td>
                     <td style={{ fontWeight: 500 }}>{company.name}</td>
                     <td style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>{company.gstin || '-'}</td>
                     <td style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>{company.msmeNumber || '-'}</td>
@@ -229,6 +273,36 @@ function Companies() {
                     onChange={handleInputChange}
                     placeholder="Complete address of the company"
                   />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Company Logo</label>
+                  <input
+                    key={editingCompany ? editingCompany.id : 'new'}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileChange}
+                    className="form-input"
+                  />
+                  {editingCompany && editingCompany.logo && (
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <img 
+                        src={`http://localhost:5000${editingCompany.logo}`} 
+                        alt="Current logo" 
+                        style={{ width: '100px', height: '100px', objectFit: 'contain', border: '1px solid #ddd', borderRadius: '4px' }}
+                        onError={(e) => {
+                          e.target.style.display = 'none';
+                          e.target.nextSibling.style.display = 'block';
+                        }}
+                      />
+                      <div style={{ display: 'none', padding: '1rem', backgroundColor: '#f5f5f5', borderRadius: '4px', textAlign: 'center' }}>
+                        Current logo file not found
+                      </div>
+                      <p style={{ fontSize: '0.875rem', color: '#666', marginTop: '0.25rem' }}>
+                        Upload a new logo to replace the current one
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 
