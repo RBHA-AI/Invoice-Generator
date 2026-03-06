@@ -44,6 +44,15 @@ function InvoiceView() {
         <div>Due Date: {new Date(invoice.dueDate).toLocaleDateString('en-GB')}</div>
         <div>Total: ₹{formatCurrency(invoice.total)}</div>
         <div>Status: {invoice.status}</div>
+        {invoice.bankName && (
+          <div style={{ marginTop: '1rem' }}>
+            <strong>Bank Details</strong><br />
+            <div>BANK NAME: {invoice.bankName}</div>
+            <div>BRANCH: {invoice.bankBranch}</div>
+            <div>ACCOUNT NO: {invoice.bankAccount}</div>
+            <div>IFSC: {invoice.ifsc}</div>
+          </div>
+        )}
 
         <h4 style={{ marginTop: '1rem' }}>Items</h4>
         <table className="table">

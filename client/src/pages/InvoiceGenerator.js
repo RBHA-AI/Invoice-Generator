@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Trash2, Download, Eye } from 'lucide-react';
+import { Trash2, Download, Eye } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import './InvoiceGenerator.css';
@@ -9,12 +9,23 @@ function InvoiceGenerator() {
   const [clients, setClients] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [invoiceNumber, setInvoiceNumber] = useState('');
+  const defaultBank = {
+    bankName: 'HDFC BANK LIMITED',
+    bankBranch: 'CC-31, COMMERCIAL COMPLEX, NARAINA IND AREA',
+    bankAccount: '50200003760432',
+    ifsc: 'HDFC0000440'
+  };
   const [formData, setFormData] = useState({
     clientId: '',
     companyId: '',
     invoiceDate: new Date().toISOString().split('T')[0],
     dueDate: new Date().toISOString().split('T')[0],
     placeOfSupply: 'Delhi (07)',
+    bankName: 'HDFC BANK LIMITED',
+    bankBranch: 'CC-31, COMMERCIAL COMPLEX, NARAINA IND AREA',
+    bankAccount: '50200003760432',
+    ifsc: 'HDFC0000440',
+    signatureTitle: 'PARTNER',
     items: [
       {
         description: '',
@@ -36,7 +47,6 @@ function InvoiceGenerator() {
   const computedSelectedClient = selectedClient || clients.find(c => c.id === formData.clientId) || null;
   const clientStateNormalized = (computedSelectedClient && computedSelectedClient.state) ? String(computedSelectedClient.state).toLowerCase() : '';
   const isInterState = clientStateNormalized && !clientStateNormalized.includes(firmState);
-  const signedAt = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Kolkata' });
 
   useEffect(() => {
     fetchClients();
@@ -98,8 +108,20 @@ function InvoiceGenerator() {
 
   const handleCompanyChange = (e) => {
     const companyId = e.target.value;
-    setFormData({ ...formData, companyId });
     const company = companies.find(c => c.id === companyId);
+    // If company exists and has bank details, prefill them
+    if (company) {
+      setFormData({
+        ...formData,
+        companyId,
+        bankName: company.bankName || formData.bankName,
+        bankBranch: company.bankBranch || formData.bankBranch,
+        bankAccount: company.bankAccount || formData.bankAccount,
+        ifsc: company.ifsc || formData.ifsc
+      });
+    } else {
+      setFormData({ ...formData, companyId });
+    }
     setSelectedCompany(company);
   };
 
@@ -116,23 +138,6 @@ function InvoiceGenerator() {
     setFormData({ ...formData, items: newItems });
   };
 
-  const addItem = () => {
-    setFormData({
-      ...formData,
-      items: [
-        ...formData.items,
-        {
-          description: '',
-          detailedDescription: '',
-          hsnSac: '',
-          quantity: 1,
-          rate: 0,
-          cgstPercent: 9,
-          sgstPercent: 9
-        }
-      ]
-    });
-  };
 
   const removeItem = (index) => {
     const newItems = formData.items.filter((_, i) => i !== index);
@@ -262,6 +267,11 @@ function InvoiceGenerator() {
       invoiceDate: formData.invoiceDate,
       dueDate: formData.dueDate,
       placeOfSupply: formData.placeOfSupply,
+      bankName: formData.bankName,
+      bankBranch: formData.bankBranch,
+      bankAccount: formData.bankAccount,
+      ifsc: formData.ifsc,
+      signatureTitle: formData.signatureTitle,
       items: formData.items.map(item => ({
         ...item,
         amount: calculateItemAmount(item)
@@ -451,16 +461,63 @@ function InvoiceGenerator() {
                 onChange={handleInputChange}
               />
             </div>
-          </div>
 
-          <div className="card">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="section-title">Line Items</h3>
-              <button className="btn btn-outline" onClick={addItem} style={{ padding: '0.5rem 1rem' }}>
-                <Plus size={16} />
-                Add Item
-              </button>
-            </div>
+              {/* Bank information fields */}
+              <div className="form-group">
+                <label className="form-label">Bank Name</label>
+                <input
+                  type="text"
+                  name="bankName"
+                  className="form-input"
+                  value={formData.bankName}
+                  onChange={handleInputChange}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Branch</label>
+                <input
+                  type="text"
+                  name="bankBranch"
+                  className="form-input"
+                  value={formData.bankBranch}
+                  onChange={handleInputChange}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Account Number</label>
+                <input
+                  type="text"
+                  name="bankAccount"
+                  className="form-input"
+                  value={formData.bankAccount}
+                  onChange={handleInputChange}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">IFSC Code</label>
+                <input
+                  type="text"
+                  name="ifsc"
+                  className="form-input"
+                  value={formData.ifsc}
+                  onChange={handleInputChange}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Signature Title</label>
+                <input
+                  type="text"
+                  name="signatureTitle"
+                  className="form-input"
+                  value={formData.signatureTitle}
+                  onChange={handleInputChange}
+                  placeholder="PARTNER"
+                />
+              </div>
 
             {formData.items.map((item, index) => (
               <div key={index} className="item-row">
@@ -635,7 +692,7 @@ function InvoiceGenerator() {
                 <div className="header-left">
                   {selectedCompany && selectedCompany.logo ? (
                     <img 
-                      src={`http://localhost:5000${selectedCompany.logo}`} 
+                      src={selectedCompany.logo} 
                       alt={`${selectedCompany.name} Logo`} 
                       className="invoice-logo"
                       onError={(e) => {
@@ -658,6 +715,12 @@ function InvoiceGenerator() {
                       )}
                       {selectedCompany.msmeNumber && (
                         <p className="firm-gstin">MSME {selectedCompany.msmeNumber}</p>
+                      )}
+                      {selectedCompany.email && (
+                        <p className="firm-gstin">Email: {selectedCompany.email}</p>
+                      )}
+                      {selectedCompany.phone && (
+                        <p className="firm-gstin">Phone: {selectedCompany.phone}</p>
                       )}
                     </>
                   ) : (
@@ -810,10 +873,10 @@ function InvoiceGenerator() {
 
                   {/* Bank Details */}
                   <div className="bank-details">
-                    <strong>BANK NAME :</strong> HDFC BANK LIMITED<br />
-                    <strong>BRANCH :</strong> CC-31, COMMERCIAL COMPLEX, NARAINA IND AREA<br />
-                    <strong>BANK ACCOUNT NO :</strong> 50200003760432<br />
-                    <strong>IFSC CODE :</strong> HDFC0000440
+                    <strong>BANK NAME :</strong> {formData.bankName || 'N/A'}<br />
+                    <strong>BRANCH :</strong> {formData.bankBranch || 'N/A'}<br />
+                    <strong>BANK ACCOUNT NO :</strong> {formData.bankAccount || 'N/A'}<br />
+                    <strong>IFSC CODE :</strong> {formData.ifsc || 'N/A'}
                   </div>
 
                   {/* Terms & Conditions */}
@@ -871,7 +934,7 @@ function InvoiceGenerator() {
                       <div className="signature-middle">
                         {/* Empty space for physical signature */}
                       </div>
-                      <div className="signature-bottom">PARTNER</div>
+                      <div className="signature-bottom">{formData.signatureTitle || 'PARTNER'}</div>
                     </div>
                   </div>
                 </div>

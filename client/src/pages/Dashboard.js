@@ -199,7 +199,7 @@ function Dashboard() {
                 {company.logo ? (
                   <>
                     <img 
-                      src={`http://localhost:5000${company.logo}`} 
+                      src={company.logo} 
                       alt={`${company.name} logo`} 
                       style={{ width: '60px', height: '60px', objectFit: 'contain', marginBottom: '0.5rem' }}
                       onError={(e) => {

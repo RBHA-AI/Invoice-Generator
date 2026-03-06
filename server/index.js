@@ -34,6 +34,7 @@ const upload = multer({
 });
 
 // Middleware
+app.use(cors());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '../client/build')));
 app.use('/uploads', express.static('./server/uploads'));
@@ -60,11 +61,42 @@ try {
 try {
   db.prepare("ALTER TABLE invoices ADD COLUMN taxType TEXT").run();
 } catch (e) {}
+try {  db.prepare("ALTER TABLE invoices ADD COLUMN bankName TEXT").run();
+} catch (e) {}
 try {
-  db.prepare("ALTER TABLE invoices ADD COLUMN companyId TEXT").run();
+  db.prepare("ALTER TABLE invoices ADD COLUMN bankBranch TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE invoices ADD COLUMN bankAccount TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE invoices ADD COLUMN ifsc TEXT").run();
+} catch (e) {}
+try {  db.prepare("ALTER TABLE invoices ADD COLUMN companyId TEXT").run();
 } catch (e) {}
 try {
   db.prepare("ALTER TABLE companies ADD COLUMN logo TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE companies ADD COLUMN bankName TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE companies ADD COLUMN bankBranch TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE companies ADD COLUMN bankAccount TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE companies ADD COLUMN ifsc TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE companies ADD COLUMN email TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE companies ADD COLUMN phone TEXT").run();
+} catch (e) {}
+try {
+  db.prepare("ALTER TABLE invoices ADD COLUMN signatureTitle TEXT DEFAULT 'PARTNER'").run();
 } catch (e) {}
 
 // Create tables
@@ -76,6 +108,12 @@ db.exec(`
     gstin TEXT,
     msmeNumber TEXT,
     logo TEXT,
+    bankName TEXT,
+    bankBranch TEXT,
+    bankAccount TEXT,
+    ifsc TEXT,
+    email TEXT,
+    phone TEXT,
     createdAt TEXT DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -102,6 +140,10 @@ db.exec(`
     invoiceDate TEXT NOT NULL,
     dueDate TEXT NOT NULL,
     placeOfSupply TEXT,
+    bankName TEXT,
+    bankBranch TEXT,
+    bankAccount TEXT,
+    ifsc TEXT,
     subtotal REAL,
     cgst REAL,
     sgst REAL,
@@ -162,16 +204,16 @@ app.post('/api/companies', (req, res) => {
     }
     
     try {
-      const { name, address, gstin, msmeNumber } = req.body;
+      const { name, address, gstin, msmeNumber, bankName, bankBranch, bankAccount, ifsc, email, phone } = req.body;
       const logo = req.file ? `/uploads/logos/${req.file.filename}` : null;
       const id = uuidv4();
       
       const stmt = db.prepare(`
-        INSERT INTO companies (id, name, address, gstin, msmeNumber, logo)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO companies (id, name, address, gstin, msmeNumber, logo, bankName, bankBranch, bankAccount, ifsc, email, phone)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       
-      stmt.run(id, name, address || null, gstin || null, msmeNumber || null, logo);
+      stmt.run(id, name, address || null, gstin || null, msmeNumber || null, logo, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, email || null, phone || null);
       
       const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(id);
       res.status(201).json(company);
@@ -189,24 +231,24 @@ app.put('/api/companies/:id', (req, res, next) => {
     }
     
     try {
-      const { name, address, gstin, msmeNumber } = req.body;
+      const { name, address, gstin, msmeNumber, bankName, bankBranch, bankAccount, ifsc, email, phone } = req.body;
       const logo = req.file ? `/uploads/logos/${req.file.filename}` : undefined;
 
       let stmt;
       if (logo !== undefined) {
         stmt = db.prepare(`
           UPDATE companies 
-          SET name = ?, address = ?, gstin = ?, msmeNumber = ?, logo = ?
+          SET name = ?, address = ?, gstin = ?, msmeNumber = ?, logo = ?, bankName = ?, bankBranch = ?, bankAccount = ?, ifsc = ?, email = ?, phone = ?
           WHERE id = ?
         `);
-        stmt.run(name, address || null, gstin || null, msmeNumber || null, logo, req.params.id);
+        stmt.run(name, address || null, gstin || null, msmeNumber || null, logo, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, email || null, phone || null, req.params.id);
       } else {
         stmt = db.prepare(`
           UPDATE companies 
-          SET name = ?, address = ?, gstin = ?, msmeNumber = ?
+          SET name = ?, address = ?, gstin = ?, msmeNumber = ?, bankName = ?, bankBranch = ?, bankAccount = ?, ifsc = ?, email = ?, phone = ?
           WHERE id = ?
         `);
-        stmt.run(name, address || null, gstin || null, msmeNumber || null, req.params.id);
+        stmt.run(name, address || null, gstin || null, msmeNumber || null, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, email || null, phone || null, req.params.id);
       }
       
       const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id);
@@ -386,16 +428,16 @@ app.get('/api/invoices/generate-number', (req, res) => {
 // Create invoice
 app.post('/api/invoices', (req, res) => {
   try {
-    const { invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, items, subtotal, cgst, sgst, igst, taxType, total, status } = req.body;
+    const { invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName, bankBranch, bankAccount, ifsc, items, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle } = req.body;
     const invoiceId = uuidv4();
     
     // Insert invoice
     const invoiceStmt = db.prepare(`
-      INSERT INTO invoices (id, invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, subtotal, cgst, sgst, igst, taxType, total, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoices (id, invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName, bankBranch, bankAccount, ifsc, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
-    invoiceStmt.run(invoiceId, invoiceNumber, clientId, companyId || null, invoiceDate, dueDate, placeOfSupply, subtotal, cgst, sgst, igst || 0, taxType || null, total, status || 'draft');
+    invoiceStmt.run(invoiceId, invoiceNumber, clientId, companyId || null, invoiceDate, dueDate, placeOfSupply, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, subtotal, cgst, sgst, igst || 0, taxType || null, total, status || 'draft', signatureTitle || 'PARTNER');
     
     // Insert items
     const itemStmt = db.prepare(`

@@ -10,6 +10,12 @@ function Companies() {
     address: '',
     gstin: '',
     msmeNumber: '',
+    email: '',
+    phone: '',
+    bankName: '',
+    bankBranch: '',
+    bankAccount: '',
+    ifsc: '',
     logo: null
   });
 
@@ -42,6 +48,12 @@ function Companies() {
       formDataToSend.append('address', formData.address);
       formDataToSend.append('gstin', formData.gstin);
       formDataToSend.append('msmeNumber', formData.msmeNumber);
+      formDataToSend.append('email', formData.email);
+      formDataToSend.append('phone', formData.phone);
+      formDataToSend.append('bankName', formData.bankName);
+      formDataToSend.append('bankBranch', formData.bankBranch);
+      formDataToSend.append('bankAccount', formData.bankAccount);
+      formDataToSend.append('ifsc', formData.ifsc);
       if (formData.logo) {
         formDataToSend.append('logo', formData.logo);
       }
@@ -81,6 +93,12 @@ function Companies() {
         address: company.address || '',
         gstin: company.gstin || '',
         msmeNumber: company.msmeNumber || '',
+        email: company.email || '',
+        phone: company.phone || '',
+        bankName: company.bankName || '',
+        bankBranch: company.bankBranch || '',
+        bankAccount: company.bankAccount || '',
+        ifsc: company.ifsc || '',
         logo: null // Reset file input
       });
     } else {
@@ -90,6 +108,12 @@ function Companies() {
         address: '',
         gstin: '',
         msmeNumber: '',
+        email: '',
+        phone: '',
+        bankName: '',
+        bankBranch: '',
+        bankAccount: '',
+        ifsc: '',
         logo: null
       });
     }
@@ -104,6 +128,12 @@ function Companies() {
       address: '',
       gstin: '',
       msmeNumber: '',
+      email: '',
+      phone: '',
+      bankName: '',
+      bankBranch: '',
+      bankAccount: '',
+      ifsc: '',
       logo: null
     });
   };
@@ -144,6 +174,11 @@ function Companies() {
                 <th>Company Name</th>
                 <th>GSTIN</th>
                 <th>MSME Number</th>
+                <th>Email / Phone</th>
+                <th>Bank Name</th>
+                <th>Branch</th>
+                <th>Account</th>
+                <th>IFSC</th>
                 <th>Address</th>
                 <th>Actions</th>
               </tr>
@@ -162,7 +197,7 @@ function Companies() {
                       {company.logo ? (
                         <>
                           <img 
-                            src={`http://localhost:5000${company.logo}`} 
+                            src={company.logo} 
                             alt={`${company.name} logo`} 
                             style={{ width: '40px', height: '40px', objectFit: 'contain' }}
                             onError={(e) => {
@@ -183,6 +218,14 @@ function Companies() {
                     <td style={{ fontWeight: 500 }}>{company.name}</td>
                     <td style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>{company.gstin || '-'}</td>
                     <td style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>{company.msmeNumber || '-'}</td>
+                    <td>
+                      <div>{company.email || '-'}</div>
+                      <div style={{ fontSize: '0.875rem', color: '#666' }}>{company.phone || '-'}</div>
+                    </td>
+                    <td>{company.bankName || '-'}</td>
+                    <td>{company.bankBranch || '-'}</td>
+                    <td style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>{company.bankAccount || '-'}</td>
+                    <td>{company.ifsc || '-'}</td>
                     <td style={{ maxWidth: 250, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {company.address || '-'}
                     </td>
@@ -264,6 +307,79 @@ function Companies() {
                   />
                 </div>
 
+                <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                  <div className="form-group">
+                    <label className="form-label">Email</label>
+                    <input
+                      type="email"
+                      name="email"
+                      className="form-input"
+                      value={formData.email}
+                      onChange={handleInputChange}
+                      placeholder="company@example.com"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Phone</label>
+                    <input
+                      type="tel"
+                      name="phone"
+                      className="form-input"
+                      value={formData.phone}
+                      onChange={handleInputChange}
+                      placeholder="+91 98765 43210"
+                    />
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Bank Name</label>
+                  <input
+                    type="text"
+                    name="bankName"
+                    className="form-input"
+                    value={formData.bankName}
+                    onChange={handleInputChange}
+                    placeholder="HDFC BANK LIMITED"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Branch</label>
+                  <input
+                    type="text"
+                    name="bankBranch"
+                    className="form-input"
+                    value={formData.bankBranch}
+                    onChange={handleInputChange}
+                    placeholder="Branch address"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">Account Number</label>
+                  <input
+                    type="text"
+                    name="bankAccount"
+                    className="form-input"
+                    value={formData.bankAccount}
+                    onChange={handleInputChange}
+                    placeholder="50200003760432"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label className="form-label">IFSC Code</label>
+                  <input
+                    type="text"
+                    name="ifsc"
+                    className="form-input"
+                    value={formData.ifsc}
+                    onChange={handleInputChange}
+                    placeholder="HDFC0000440"
+                  />
+                </div>
+
                 <div className="form-group">
                   <label className="form-label">Address</label>
                   <textarea
@@ -287,7 +403,7 @@ function Companies() {
                   {editingCompany && editingCompany.logo && (
                     <div style={{ marginTop: '0.5rem' }}>
                       <img 
-                        src={`http://localhost:5000${editingCompany.logo}`} 
+                        src={editingCompany.logo} 
                         alt="Current logo" 
                         style={{ width: '100px', height: '100px', objectFit: 'contain', border: '1px solid #ddd', borderRadius: '4px' }}
                         onError={(e) => {
