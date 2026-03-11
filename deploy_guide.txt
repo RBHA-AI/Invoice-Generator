@@ -1,0 +1,23 @@
+sudo cp -r /home/admin1/Downloads/rbhargava-invoice-generator/client/build/* /var/www/invoice-app/
+sudo chown -R www-data:www-data /var/www/invoice-app
+
+
+
+run this whenever a change in frontend is done
+
+
+below is the cloudflare url created
+
+https://measure-consolidation-alberta-gravity.trycloudflare.com
+
+
+
+admin1@admin1-X870-GAMING-WIFI6:~$ cloudflared tunnel create invoice-tunnel
+Tunnel credentials written to /home/admin1/.cloudflared/0666c4fd-373e-4fa2-9549-5f95a8c82ba2.json. cloudflared chose this file based on where your origin certificate was found. Keep this file secret. To revoke these credentials, delete the tunnel.
+
+Created tunnel invoice-tunnel with id 0666c4fd-373e-4fa2-9549-5f95a8c82ba2
+admin1@admin1-X870-GAMING-WIFI6:~$
+
+
+
+https://invoice.invoicecreation.store
