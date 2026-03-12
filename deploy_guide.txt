@@ -21,3 +21,12 @@ admin1@admin1-X870-GAMING-WIFI6:~$
 
 
 https://invoice.invoicecreation.store
+
+
+You can deploy using git pull + pm2 restart automatically.
+
+Example production command:
+
+git pull origin main && pm2 restart invoice-backend
+
+Takes 2 seconds to deploy.

@@ -656,7 +656,7 @@ function InvoiceGenerator() {
               </div>
               {isInterState ? (
                 <div className="summary-row">
-                  <span>IGST:</span>
+                  <span>Tax:</span>
                   <span>₹{formatCurrency(calculateTotalIGST())}</span>
                 </div>
               ) : (
@@ -910,7 +910,7 @@ function InvoiceGenerator() {
                       </tr>
                       {isInterState ? (
                         <tr>
-                          <td>CGST9 (9%)</td>
+                          <td>Tax</td>
                           <td className="amount-cell">{formatCurrency(calculateTotalIGST())}</td>
                         </tr>
                       ) : (
