@@ -41,12 +41,19 @@ function InvoiceGenerator() {
   
   const [selectedClient, setSelectedClient] = useState(null);
   const [selectedCompany, setSelectedCompany] = useState(null);
+  const [taxMode, setTaxMode] = useState('auto'); // 'auto', 'igst', 'cgst_sgst'
   const invoicePreviewRef = useRef(null);
   const navigate = useNavigate();
-  const firmState = 'delhi';
-  const computedSelectedClient = selectedClient || clients.find(c => c.id === formData.clientId) || null;
-  const clientStateNormalized = (computedSelectedClient && computedSelectedClient.state) ? String(computedSelectedClient.state).toLowerCase() : '';
-  const isInterState = clientStateNormalized && !clientStateNormalized.includes(firmState);
+  
+  // Get states from selected company and client
+  const companyState = (selectedCompany?.state || 'delhi').toLowerCase();
+  const clientState = (selectedClient?.state || '').toLowerCase();
+  
+  // Auto-detect interstate
+  const autoIsInterState = clientState && companyState !== clientState;
+  
+  // Final tax mode decision
+  const isInterState = taxMode === 'auto' ? autoIsInterState : taxMode === 'igst';
 
   useEffect(() => {
     fetchClients();
@@ -529,6 +536,86 @@ function InvoiceGenerator() {
                   placeholder="PARTNER"
                 />
               </div>
+
+              {/* Tax Mode Toggle */}
+              <div className="form-group">
+                <label className="form-label">Tax Mode</label>
+                <div style={{ 
+                  display: 'flex', 
+                  gap: '8px', 
+                  padding: '4px', 
+                  background: '#f0f0f0', 
+                  borderRadius: '8px',
+                  border: '1px solid var(--border)'
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setTaxMode('auto')}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      border: 'none',
+                      borderRadius: '6px',
+                      background: taxMode === 'auto' ? 'var(--accent)' : 'transparent',
+                      color: taxMode === 'auto' ? 'white' : 'var(--text)',
+                      fontWeight: taxMode === 'auto' ? '600' : '500',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      fontSize: '14px'
+                    }}
+                  >
+                    Auto {autoIsInterState ? '(IGST)' : '(CGST+SGST)'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaxMode('cgst_sgst')}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      border: 'none',
+                      borderRadius: '6px',
+                      background: taxMode === 'cgst_sgst' ? 'var(--accent)' : 'transparent',
+                      color: taxMode === 'cgst_sgst' ? 'white' : 'var(--text)',
+                      fontWeight: taxMode === 'cgst_sgst' ? '600' : '500',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      fontSize: '14px'
+                    }}
+                  >
+                    CGST + SGST
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTaxMode('igst')}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      border: 'none',
+                      borderRadius: '6px',
+                      background: taxMode === 'igst' ? 'var(--accent)' : 'transparent',
+                      color: taxMode === 'igst' ? 'white' : 'var(--text)',
+                      fontWeight: taxMode === 'igst' ? '600' : '500',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      fontSize: '14px'
+                    }}
+                  >
+                    IGST
+                  </button>
+                </div>
+                {taxMode === 'auto' && (selectedCompany || selectedClient) && (
+                  <p style={{ fontSize: '12px', color: 'var(--text-light)', marginTop: '8px', marginBottom: 0 }}>
+                    {autoIsInterState 
+                      ? `Inter-state: ${companyState.toUpperCase()} → ${clientState.toUpperCase()} (using IGST)`
+                      : `Same state: ${companyState.toUpperCase()} (using CGST + SGST)`
+                    }
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="card">
+              <h3 className="section-title">Line Items</h3>
 
             {formData.items.map((item, index) => (
               <div key={index} className="item-row">
