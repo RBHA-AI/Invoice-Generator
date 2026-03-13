@@ -60,10 +60,22 @@ function Clients() {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this client?')) {
       try {
-        await fetch(`/api/clients/${id}`, { method: 'DELETE' });
+        const res = await fetch(`/api/clients/${id}`, { method: 'DELETE' });
+        if (!res.ok) {
+          let message = 'Failed to delete client.';
+          try {
+            const data = await res.json();
+            if (data && data.error) {
+              message = data.error;
+            }
+          } catch (_) {}
+          alert(message);
+          return;
+        }
         fetchClients();
       } catch (error) {
         console.error('Error deleting client:', error);
+        alert('Error deleting client. Please check the server logs.');
       }
     }
   };

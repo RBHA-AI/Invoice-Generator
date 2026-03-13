@@ -335,10 +335,26 @@ app.put('/api/clients/:id', (req, res) => {
   }
 });
 
-// Delete client
+// Delete client (prevent delete if invoices exist)
 app.delete('/api/clients/:id', (req, res) => {
   try {
+    const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
+
+    const invoiceCount = db
+      .prepare('SELECT COUNT(*) as count FROM invoices WHERE clientId = ?')
+      .get(req.params.id).count;
+
+    if (invoiceCount > 0) {
+      return res.status(409).json({
+        error: 'Cannot delete client because invoices exist for this client. Please delete those invoices first.'
+      });
+    }
+
     db.prepare('DELETE FROM clients WHERE id = ?').run(req.params.id);
+
     res.json({ message: 'Client deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -422,6 +438,112 @@ app.get('/api/invoices/:id', (req, res) => {
     
     res.json({ ...invoice, items });
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update invoice (including items)
+app.put('/api/invoices/:id', (req, res) => {
+  try {
+    const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+
+    const {
+      invoiceNumber,
+      clientId,
+      companyId,
+      invoiceDate,
+      dueDate,
+      placeOfSupply,
+      bankName,
+      bankBranch,
+      bankAccount,
+      ifsc,
+      items,
+      subtotal,
+      cgst,
+      sgst,
+      igst,
+      taxType,
+      total,
+      status,
+      signatureTitle
+    } = req.body;
+
+    const tx = db.transaction(() => {
+      const updateStmt = db.prepare(`
+        UPDATE invoices
+        SET invoiceNumber = ?, clientId = ?, companyId = ?, invoiceDate = ?, dueDate = ?, placeOfSupply = ?, 
+            bankName = ?, bankBranch = ?, bankAccount = ?, ifsc = ?, subtotal = ?, cgst = ?, sgst = ?, igst = ?, 
+            taxType = ?, total = ?, status = ?, signatureTitle = ?
+        WHERE id = ?
+      `);
+
+      updateStmt.run(
+        invoiceNumber,
+        clientId,
+        companyId || null,
+        invoiceDate,
+        dueDate,
+        placeOfSupply,
+        bankName || null,
+        bankBranch || null,
+        bankAccount || null,
+        ifsc || null,
+        subtotal,
+        cgst,
+        sgst,
+        igst || 0,
+        taxType || null,
+        total,
+        status || existing.status || 'draft',
+        signatureTitle || existing.signatureTitle || 'PARTNER',
+        req.params.id
+      );
+
+      db.prepare('DELETE FROM invoice_items WHERE invoiceId = ?').run(req.params.id);
+
+      if (Array.isArray(items)) {
+        const itemStmt = db.prepare(`
+          INSERT INTO invoice_items (id, invoiceId, description, detailedDescription, hsnSac, quantity, rate, cgstPercent, sgstPercent, amount)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        items.forEach(item => {
+          itemStmt.run(
+            uuidv4(),
+            req.params.id,
+            item.description,
+            item.detailedDescription || null,
+            item.hsnSac,
+            item.quantity,
+            item.rate,
+            item.cgstPercent,
+            item.sgstPercent,
+            item.amount
+          );
+        });
+      }
+    });
+
+    tx();
+
+    const invoice = db.prepare(`
+      SELECT i.*, c.* 
+      FROM invoices i 
+      LEFT JOIN clients c ON i.clientId = c.id 
+      WHERE i.id = ?
+    `).get(req.params.id);
+
+    const savedItems = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(req.params.id);
+
+    res.json({ ...invoice, items: savedItems });
+  } catch (error) {
+    if (error && error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return res.status(409).json({ error: 'Invoice number must be unique' });
+    }
     res.status(500).json({ error: error.message });
   }
 });

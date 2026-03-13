@@ -7,12 +7,14 @@ import Clients from './pages/Clients';
 import Companies from './pages/Companies';
 import InvoiceGenerator from './pages/InvoiceGenerator';
 import InvoiceView from './pages/InvoiceView';
+import Invoices from './pages/Invoices';
 
 function Navigation() {
   const location = useLocation();
   
   const navItems = [
     { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { path: '/invoices', icon: FileText, label: 'Invoices' },
     { path: '/companies', icon: Building2, label: 'Companies' },
     { path: '/clients', icon: Users, label: 'Clients' },
     { path: '/invoice', icon: FileText, label: 'New Invoice' },
@@ -65,6 +67,7 @@ function App() {
         <main className="main-content">
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/invoices" element={<Invoices />} />
             <Route path="/companies" element={<Companies />} />
             <Route path="/clients" element={<Clients />} />
             <Route path="/invoice" element={<InvoiceGenerator />} />

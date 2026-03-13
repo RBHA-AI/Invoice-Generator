@@ -9,8 +9,11 @@ function Dashboard() {
     totalRevenue: 0,
     pendingAmount: 0
   });
-  const [recentInvoices, setRecentInvoices] = useState([]);
+  const [invoices, setInvoices] = useState([]);
   const [companies, setCompanies] = useState([]);
+  const [clients, setClients] = useState([]);
+  const [invoiceSearch, setInvoiceSearch] = useState('');
+  const [invoiceClientFilter, setInvoiceClientFilter] = useState('');
 
   useEffect(() => {
     fetchDashboardData();
@@ -24,23 +27,24 @@ function Dashboard() {
         fetch('/api/companies')
       ]);
       
-      const clients = await clientsRes.json();
-      const invoices = await invoicesRes.json();
+      const clientsData = await clientsRes.json();
+      const invoicesData = await invoicesRes.json();
       const companiesData = await companiesRes.json();
       
-      const totalRevenue = invoices.reduce((sum, inv) => sum + (inv.total || 0), 0);
-      const pendingAmount = invoices
+      const totalRevenue = invoicesData.reduce((sum, inv) => sum + (inv.total || 0), 0);
+      const pendingAmount = invoicesData
         .filter(inv => inv.status === 'draft')
         .reduce((sum, inv) => sum + (inv.total || 0), 0);
       
       setStats({
-        totalClients: clients.length,
-        totalInvoices: invoices.length,
+        totalClients: clientsData.length,
+        totalInvoices: invoicesData.length,
         totalRevenue,
         pendingAmount
       });
       
-      setRecentInvoices(invoices.slice(0, 5));
+      setInvoices(invoicesData);
+      setClients(clientsData);
       setCompanies(companiesData.slice(0, 5)); // Show recent 5 companies
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -62,6 +66,19 @@ function Dashboard() {
       year: 'numeric'
     });
   };
+
+  const filteredInvoices = invoices.filter((invoice) => {
+    const matchesClient = invoiceClientFilter
+      ? invoice.clientId === invoiceClientFilter
+      : true;
+    const search = invoiceSearch.trim().toLowerCase();
+    const matchesSearch = search
+      ? String(invoice.invoiceNumber || '').toLowerCase().includes(search)
+      : true;
+    return matchesClient && matchesSearch;
+  });
+
+  const visibleInvoices = filteredInvoices.slice(0, 8);
 
   return (
     <div>
@@ -109,15 +126,63 @@ function Dashboard() {
       </div>
 
       <div className="card">
-        <h3 style={{ 
-          fontFamily: 'Playfair Display, serif', 
-          fontSize: '1.5rem', 
-          marginBottom: '1.5rem',
-          color: 'var(--primary)'
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center', 
+          marginBottom: '1.25rem'
         }}>
-          Recent Invoices
-        </h3>
-        
+          <div>
+            <h3 style={{ 
+              fontFamily: 'Playfair Display, serif', 
+              fontSize: '1.5rem', 
+              margin: 0,
+              color: 'var(--primary)'
+            }}>
+              Saved Invoices
+            </h3>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '0.9rem', color: 'var(--text-light)' }}>
+              Showing latest invoices. Use filters to narrow down.
+            </p>
+          </div>
+          <Link to="/invoices" className="btn btn-outline" style={{ fontSize: '0.875rem', padding: '0.5rem 1rem' }}>
+            View All
+          </Link>
+        </div>
+
+        <div style={{ 
+          display: 'flex', 
+          gap: '0.75rem', 
+          marginBottom: '1rem', 
+          flexWrap: 'wrap' 
+        }}>
+          <div style={{ minWidth: 220 }}>
+            <label className="form-label" style={{ marginBottom: '0.25rem' }}>Filter by Client</label>
+            <select
+              className="form-select"
+              value={invoiceClientFilter}
+              onChange={(e) => setInvoiceClientFilter(e.target.value)}
+            >
+              <option value="">All clients</option>
+              {clients.map((client) => (
+                <option key={client.id} value={client.id}>
+                  {client.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={{ minWidth: 220 }}>
+            <label className="form-label" style={{ marginBottom: '0.25rem' }}>Search by Invoice Number</label>
+            <input
+              type="text"
+              className="form-input"
+              placeholder="e.g. DL/01 or TEST"
+              value={invoiceSearch}
+              onChange={(e) => setInvoiceSearch(e.target.value)}
+            />
+          </div>
+        </div>
+
         <div className="table-container">
           <table className="table">
             <thead>
@@ -130,14 +195,14 @@ function Dashboard() {
               </tr>
             </thead>
             <tbody>
-              {recentInvoices.length === 0 ? (
+              {visibleInvoices.length === 0 ? (
                 <tr>
                   <td colSpan="5" className="text-center" style={{ padding: '3rem', color: 'var(--text-light)' }}>
                     No invoices yet. Create your first invoice to get started.
                   </td>
                 </tr>
               ) : (
-                recentInvoices.map(invoice => (
+                visibleInvoices.map(invoice => (
                   <tr key={invoice.id}>
                     <td style={{ fontFamily: 'monospace', fontWeight: 500 }}>
                       <Link to={`/invoice/${invoice.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>

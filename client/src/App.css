@@ -1,19 +1,19 @@
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
 
 :root {
-  --primary: #1a2332;
-  --primary-light: #2d3e50;
+  --primary: #111827;
+  --primary-light: #1f2937;
   --accent: #d4af37;
   --accent-dark: #b8941f;
-  --bg: #f8f9fa;
+  --bg: #f3f4f6;
   --card-bg: #ffffff;
-  --text: #1a2332;
-  --text-light: #6c757d;
+  --text: #111827;
+  --text-light: #4b5563;
   --border: #e0e6ed;
-  --success: #28a745;
-  --danger: #dc3545;
-  --shadow: 0 2px 8px rgba(26, 35, 50, 0.08);
-  --shadow-lg: 0 8px 24px rgba(26, 35, 50, 0.12);
+  --success: #059669;
+  --danger: #dc2626;
+  --shadow: 0 1px 3px rgba(15, 23, 42, 0.12);
+  --shadow-lg: 0 10px 30px rgba(15, 23, 42, 0.15);
 }
 
 * {
@@ -39,7 +39,7 @@ body {
 
 .sidebar {
   width: 280px;
-  background: linear-gradient(165deg, var(--primary) 0%, var(--primary-light) 100%);
+  background: radial-gradient(circle at top left, var(--primary-light) 0%, var(--primary) 60%, #020617 100%);
   color: white;
   display: flex;
   flex-direction: column;
@@ -278,14 +278,14 @@ body {
 }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+  background: var(--accent);
   color: white;
-  box-shadow: 0 4px 12px rgba(212, 175, 55, 0.3);
+  box-shadow: 0 4px 10px rgba(212, 175, 55, 0.25);
 }
 
 .btn-primary:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(212, 175, 55, 0.4);
+  box-shadow: 0 8px 20px rgba(212, 175, 55, 0.35);
 }
 
 .btn-secondary {
@@ -304,8 +304,8 @@ body {
 }
 
 .btn-outline:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--primary-light);
+  color: var(--primary-light);
 }
 
 .btn-danger {

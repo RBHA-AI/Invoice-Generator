@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Trash2, Download, Eye } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -44,6 +44,12 @@ function InvoiceGenerator() {
   const [taxMode, setTaxMode] = useState('auto'); // 'auto', 'igst', 'cgst_sgst'
   const invoicePreviewRef = useRef(null);
   const navigate = useNavigate();
+  const location = useLocation();
+  const searchParams = new URLSearchParams(location.search);
+  const editInvoiceIdFromQuery = searchParams.get('edit');
+  const cloneInvoiceIdFromQuery = searchParams.get('clone');
+  const [mode, setMode] = useState('new'); // 'new' | 'edit' | 'clone'
+  const [editingInvoiceId, setEditingInvoiceId] = useState(null);
   
   // Get states from selected company and client
   const companyState = (selectedCompany?.state || 'delhi').toLowerCase();
@@ -60,12 +66,88 @@ function InvoiceGenerator() {
     fetchCompanies();
     generateInvoiceNumber();
   }, []);
+
+  useEffect(() => {
+    if (editInvoiceIdFromQuery) {
+      setMode('edit');
+      setEditingInvoiceId(editInvoiceIdFromQuery);
+    } else if (cloneInvoiceIdFromQuery) {
+      setMode('clone');
+      setEditingInvoiceId(cloneInvoiceIdFromQuery);
+    } else {
+      setMode('new');
+      setEditingInvoiceId(null);
+    }
+  }, [editInvoiceIdFromQuery, cloneInvoiceIdFromQuery]);
   
   useEffect(() => {
     if (!invoiceNumber) {
       setInvoiceNumber(`INV/${Date.now()}`);
     }
   }, [invoiceNumber]);
+
+  useEffect(() => {
+    const loadInvoiceForEditing = async () => {
+      if (!editingInvoiceId) return;
+      try {
+        const res = await fetch(`/api/invoices/${editingInvoiceId}`);
+        if (!res.ok) {
+          console.error('Error loading invoice for editing:', await res.text());
+          return;
+        }
+        const data = await res.json();
+
+        setFormData(prev => ({
+          ...prev,
+          clientId: data.clientId || '',
+          companyId: data.companyId || '',
+          invoiceDate: data.invoiceDate || new Date().toISOString().split('T')[0],
+          dueDate: data.dueDate || new Date().toISOString().split('T')[0],
+          placeOfSupply: data.placeOfSupply || prev.placeOfSupply,
+          bankName: data.bankName || prev.bankName,
+          bankBranch: data.bankBranch || prev.bankBranch,
+          bankAccount: data.bankAccount || prev.bankAccount,
+          ifsc: data.ifsc || prev.ifsc,
+          signatureTitle: data.signatureTitle || prev.signatureTitle,
+          items: (data.items && data.items.length > 0)
+            ? data.items.map(item => ({
+                description: item.description || '',
+                detailedDescription: item.detailedDescription || '',
+                hsnSac: item.hsnSac || '',
+                quantity: item.quantity ?? 1,
+                rate: item.rate ?? 0,
+                cgstPercent: item.cgstPercent ?? 9,
+                sgstPercent: item.sgstPercent ?? 9
+              }))
+            : prev.items
+        }));
+
+        if (mode === 'edit' && data.invoiceNumber) {
+          setInvoiceNumber(data.invoiceNumber);
+        }
+      } catch (error) {
+        console.error('Error fetching invoice for edit/clone:', error);
+      }
+    };
+
+    if (mode === 'edit' || mode === 'clone') {
+      loadInvoiceForEditing();
+    }
+  }, [editingInvoiceId, mode]);
+
+  useEffect(() => {
+    if (formData.clientId && clients.length) {
+      const client = clients.find(c => c.id === formData.clientId);
+      setSelectedClient(client || null);
+    }
+  }, [formData.clientId, clients]);
+
+  useEffect(() => {
+    if (formData.companyId && companies.length) {
+      const company = companies.find(c => c.id === formData.companyId);
+      setSelectedCompany(company || null);
+    }
+  }, [formData.companyId, companies]);
 
   const fetchClients = async () => {
     try {
@@ -240,13 +322,19 @@ function InvoiceGenerator() {
       await generateInvoiceNumber();
     }
 
-    // Check for duplicate invoice number and offer to auto-generate
+    // Check for duplicate invoice number and offer to auto-generate (for new/clone)
     try {
       const allRes = await fetch('/api/invoices');
       if (allRes.ok) {
         const allInvoices = await allRes.json();
-        const exists = allInvoices.find(inv => String(inv.invoiceNumber) === String(invoiceNumber));
-        if (exists) {
+        const existingWithNumber = allInvoices.find(inv => String(inv.invoiceNumber) === String(invoiceNumber));
+
+        const isEditingSameInvoice =
+          mode === 'edit' &&
+          existingWithNumber &&
+          existingWithNumber.id === editingInvoiceId;
+
+        if (existingWithNumber && !isEditingSameInvoice) {
           const shouldGen = window.confirm('Invoice number already exists. Click OK to auto-generate a new invoice number, Cancel to edit.');
           if (shouldGen) {
             try {
@@ -291,6 +379,8 @@ function InvoiceGenerator() {
       subtotal: calculateSubtotal(),
       cgst: calculateTotalCGST(),
       sgst: calculateTotalSGST(),
+      igst: calculateTotalIGST(),
+      taxType: isInterState ? 'IGST' : 'CGST_SGST',
       total: calculateTotal(),
       status: 'draft'
     };
@@ -302,15 +392,26 @@ function InvoiceGenerator() {
     }
 
     try {
-      const response = await fetch('/api/invoices', {
-        method: 'POST',
+      const url = mode === 'edit' && editingInvoiceId
+        ? `/api/invoices/${editingInvoiceId}`
+        : '/api/invoices';
+      const method = mode === 'edit' && editingInvoiceId ? 'PUT' : 'POST';
+
+      const response = await fetch(url, {
+        method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(invoiceData)
       });
 
       if (response.ok) {
+        const saved = await response.json();
         alert('Invoice saved successfully!');
-        navigate('/');
+        const targetId = mode === 'edit' && editingInvoiceId ? editingInvoiceId : saved.id;
+        if (targetId) {
+          navigate(`/invoice/${targetId}`);
+        } else {
+          navigate('/');
+        }
         return;
       }
 
@@ -357,26 +458,34 @@ function InvoiceGenerator() {
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
       
-      // Calculate dimensions to fit on A4
-      const imgWidth = pdfWidth;
-      const imgHeight = (canvas.height * pdfWidth) / canvas.width;
+      // Add margins so outer border is fully visible on all sides
+      const margin = 8; // in mm
+      const usablePageHeight = pdfHeight - margin * 2;
+      
+      // Calculate dimensions to fit on A4 within margins
+      const imgWidth = pdfWidth - margin * 2;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
       
       // Handle multi-page PDFs
-      let position = 0;
-      if (imgHeight > pdfHeight) {
+      let position = margin;
+      if (imgHeight > usablePageHeight) {
         // Multiple pages needed
         let heightLeft = imgHeight;
         while (heightLeft > 0) {
-          pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-          heightLeft -= pdfHeight;
-          position -= pdfHeight;
+          pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
+          heightLeft -= usablePageHeight;
+          position -= usablePageHeight;
           if (heightLeft > 0) {
             pdf.addPage();
+            position = margin;
           }
         }
       } else {
         // Single page
-        pdf.addImage(imgData, 'PNG', 0, 0, imgWidth, imgHeight);
+        pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
+        // Draw a crisp vector border around the full invoice area
+        pdf.setLineWidth(0.5);
+        pdf.rect(margin, margin, imgWidth, imgHeight);
       }
       
       const safeInvoiceNumber = String(invoiceNumber).replace(/[^\w-]+/g, '-');
@@ -391,8 +500,16 @@ function InvoiceGenerator() {
   return (
     <div className="invoice-generator">
       <div className="page-header">
-        <h1 className="page-title">New Invoice</h1>
-        <p className="page-subtitle">Create a professional invoice with GST calculations</p>
+        <h1 className="page-title">
+          {mode === 'edit' ? 'Edit Invoice' : mode === 'clone' ? 'Clone Invoice' : 'New Invoice'}
+        </h1>
+        <p className="page-subtitle">
+          {mode === 'edit'
+            ? 'Update the details of this invoice'
+            : mode === 'clone'
+            ? 'Create a new invoice from an existing one'
+            : 'Create a professional invoice with GST calculations'}
+        </p>
       </div>
 
       <div className="invoice-layout">
@@ -784,7 +901,8 @@ function InvoiceGenerator() {
               Live Preview
             </div>
             
-            <div className="invoice-preview" ref={invoicePreviewRef}>
+            <div className="invoice-preview">
+              <div className="invoice-page" ref={invoicePreviewRef}>
               {/* Header with Logo, Firm Details, and TAX INVOICE */}
               <div className="invoice-header">
                 <div className="header-left">
@@ -806,7 +924,9 @@ function InvoiceGenerator() {
                     <>
                       <h1 className="firm-title">{selectedCompany.name}</h1>
                       {selectedCompany.address && (
-                        <p className="firm-address">{selectedCompany.address}</p>
+                        <p className="firm-address">
+                          {selectedCompany.address}
+                        </p>
                       )}
                       {selectedCompany.gstin && (
                         <p className="firm-gstin">GSTIN {selectedCompany.gstin}</p>
@@ -814,21 +934,20 @@ function InvoiceGenerator() {
                       {selectedCompany.msmeNumber && (
                         <p className="firm-gstin">MSME {selectedCompany.msmeNumber}</p>
                       )}
-                      {selectedCompany.email && (
-                        <p className="firm-gstin">Email: {selectedCompany.email}</p>
-                      )}
-                      {selectedCompany.phone && (
-                        <p className="firm-gstin">Phone: {selectedCompany.phone}</p>
+                      {(selectedCompany.email || selectedCompany.phone) && (
+                        <p className="firm-contact">
+                          {selectedCompany.email && <span>Email: {selectedCompany.email}</span>}
+                          {selectedCompany.email && selectedCompany.phone && <span className="firm-contact-separator"> · </span>}
+                          {selectedCompany.phone && <span>Phone: {selectedCompany.phone}</span>}
+                        </p>
                       )}
                     </>
                   ) : (
                     <>
                       <h1 className="firm-title">R Bhargava & Associates</h1>
                       <p className="firm-address">
-                        247-B, MIG FLATS<br />
-                        RAJOURI GARDEN<br />
-                        NEW DELHI Delhi 110027<br />
-                        India
+                        247-B, MIG FLATS, RAJOURI GARDEN,<br />
+                        NEW DELHI Delhi 110027, India
                       </p>
                       <p className="firm-gstin">GSTIN 07AAQFR3892K1ZE</p>
                     </>
@@ -1036,6 +1155,7 @@ function InvoiceGenerator() {
                     </div>
                   </div>
                 </div>
+              </div>
               </div>
             </div>
           </div>
