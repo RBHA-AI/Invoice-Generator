@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { FileText, Users, IndianRupee, TrendingUp } from 'lucide-react';
 
 function Dashboard() {
+  const navigate = useNavigate();
   const [stats, setStats] = useState({
     totalClients: 0,
     totalInvoices: 0,
@@ -14,6 +15,7 @@ function Dashboard() {
   const [clients, setClients] = useState([]);
   const [invoiceSearch, setInvoiceSearch] = useState('');
   const [invoiceClientFilter, setInvoiceClientFilter] = useState('');
+  const [invoiceCompanyFilter, setInvoiceCompanyFilter] = useState('');
 
   useEffect(() => {
     fetchDashboardData();
@@ -45,7 +47,7 @@ function Dashboard() {
       
       setInvoices(invoicesData);
       setClients(clientsData);
-      setCompanies(companiesData.slice(0, 5)); // Show recent 5 companies
+      setCompanies(companiesData); // full list for filters; card below uses slice(0, 5)
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
     }
@@ -71,11 +73,14 @@ function Dashboard() {
     const matchesClient = invoiceClientFilter
       ? invoice.clientId === invoiceClientFilter
       : true;
+    const matchesCompany = invoiceCompanyFilter
+      ? invoice.companyId === invoiceCompanyFilter
+      : true;
     const search = invoiceSearch.trim().toLowerCase();
     const matchesSearch = search
       ? String(invoice.invoiceNumber || '').toLowerCase().includes(search)
       : true;
-    return matchesClient && matchesSearch;
+    return matchesClient && matchesCompany && matchesSearch;
   });
 
   const visibleInvoices = filteredInvoices.slice(0, 8);
@@ -172,6 +177,21 @@ function Dashboard() {
             </select>
           </div>
           <div style={{ minWidth: 220 }}>
+            <label className="form-label" style={{ marginBottom: '0.25rem' }}>Filter by Company</label>
+            <select
+              className="form-select"
+              value={invoiceCompanyFilter}
+              onChange={(e) => setInvoiceCompanyFilter(e.target.value)}
+            >
+              <option value="">All companies</option>
+              {companies.map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={{ minWidth: 220 }}>
             <label className="form-label" style={{ marginBottom: '0.25rem' }}>Search by Invoice Number</label>
             <input
               type="text"
@@ -203,12 +223,15 @@ function Dashboard() {
                 </tr>
               ) : (
                 visibleInvoices.map(invoice => (
-                  <tr key={invoice.id}>
-                    <td style={{ fontFamily: 'monospace', fontWeight: 500 }}>
-                      <Link to={`/invoice/${invoice.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
-                        {invoice.invoiceNumber}
-                      </Link>
-                    </td>
+                  <tr
+                    key={invoice.id}
+                    onClick={() => navigate(`/invoice/${invoice.id}`)}
+                    style={{ cursor: 'pointer' }}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/invoice/${invoice.id}`); } }}
+                  >
+                    <td style={{ fontFamily: 'monospace', fontWeight: 500 }}>{invoice.invoiceNumber}</td>
                     <td>{invoice.clientName}</td>
                     <td>{formatDate(invoice.invoiceDate)}</td>
                     <td style={{ fontWeight: 600 }}>{formatCurrency(invoice.total)}</td>
@@ -253,7 +276,7 @@ function Dashboard() {
               No companies yet. <Link to="/companies" style={{ color: 'var(--primary)' }}>Add your first company</Link>.
             </div>
           ) : (
-            companies.map(company => (
+            companies.slice(0, 5).map(company => (
               <div key={company.id} style={{ 
                 border: '1px solid var(--border)', 
                 borderRadius: '8px', 

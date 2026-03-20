@@ -30,3 +30,15 @@ Example production command:
 git pull origin main && pm2 restart invoice-backend
 
 Takes 2 seconds to deploy.
+
+
+cd ~/Downloads/rbhargava-invoice-generator && \
+cp ~/Downloads/server-index-FIXED-DB-PATH.js server/index.js && \
+mkdir -p data && \
+[ -f invoices.db ] && cp invoices.db data/invoices.db && \
+pm2 start server/index.js --name invoice-backend --time && \
+pm2 save && \
+pm2 startup
+
+
+./deploy_live.sh full

@@ -38,6 +38,28 @@ function InvoiceView() {
     navigate(`/invoice?clone=${id}`);
   };
 
+  const handleDelete = async () => {
+    if (!window.confirm(`Delete invoice ${invoice?.invoiceNumber || ''}? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/invoices/${id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        let message = 'Failed to delete invoice.';
+        try {
+          const data = await res.json();
+          if (data && data.error) message = data.error;
+        } catch (_) {}
+        alert(message);
+        return;
+      }
+      navigate('/invoices');
+    } catch (e) {
+      console.error('Error deleting invoice:', e);
+      alert('Error deleting invoice. Please check the server logs.');
+    }
+  };
+
   if (!invoice) return (
     <div className="card">
       <p>Loading invoice...</p>
@@ -60,6 +82,9 @@ function InvoiceView() {
         <div className="flex gap-2">
           <button className="btn btn-outline" onClick={handleClone}>
             Clone
+          </button>
+          <button className="btn btn-danger" onClick={handleDelete}>
+            Delete
           </button>
           <button className="btn btn-primary" onClick={handleEdit}>
             Edit

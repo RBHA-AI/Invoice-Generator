@@ -1,28 +1,34 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 function Invoices() {
+  const navigate = useNavigate();
   const [invoices, setInvoices] = useState([]);
   const [clients, setClients] = useState([]);
+  const [companies, setCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [invoiceSearch, setInvoiceSearch] = useState('');
   const [invoiceClientFilter, setInvoiceClientFilter] = useState('');
+  const [invoiceCompanyFilter, setInvoiceCompanyFilter] = useState('');
 
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [invRes, clientsRes] = await Promise.all([
+        const [invRes, clientsRes, companiesRes] = await Promise.all([
           fetch('/api/invoices'),
-          fetch('/api/clients')
+          fetch('/api/clients'),
+          fetch('/api/companies')
         ]);
 
-        const [invJson, clientsJson] = await Promise.all([
+        const [invJson, clientsJson, companiesJson] = await Promise.all([
           invRes.json(),
-          clientsRes.json()
+          clientsRes.json(),
+          companiesRes.json()
         ]);
 
         setInvoices(invJson || []);
         setClients(clientsJson || []);
+        setCompanies(companiesJson || []);
       } catch (e) {
         console.error('Error loading invoices:', e);
       } finally {
@@ -53,11 +59,14 @@ function Invoices() {
     const matchesClient = invoiceClientFilter
       ? invoice.clientId === invoiceClientFilter
       : true;
+    const matchesCompany = invoiceCompanyFilter
+      ? invoice.companyId === invoiceCompanyFilter
+      : true;
     const search = invoiceSearch.trim().toLowerCase();
     const matchesSearch = search
       ? String(invoice.invoiceNumber || '').toLowerCase().includes(search)
       : true;
-    return matchesClient && matchesSearch;
+    return matchesClient && matchesCompany && matchesSearch;
   });
 
   return (
@@ -94,6 +103,23 @@ function Invoices() {
               {clients.map((client) => (
                 <option key={client.id} value={client.id}>
                   {client.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={{ minWidth: 220 }}>
+            <label className="form-label" style={{ marginBottom: '0.25rem' }}>
+              Filter by Company
+            </label>
+            <select
+              className="form-select"
+              value={invoiceCompanyFilter}
+              onChange={(e) => setInvoiceCompanyFilter(e.target.value)}
+            >
+              <option value="">All companies</option>
+              {companies.map((company) => (
+                <option key={company.id} value={company.id}>
+                  {company.name}
                 </option>
               ))}
             </select>
@@ -139,15 +165,15 @@ function Invoices() {
                 </tr>
               ) : (
                 filteredInvoices.map((invoice) => (
-                  <tr key={invoice.id}>
-                    <td style={{ fontFamily: 'monospace', fontWeight: 500 }}>
-                      <Link
-                        to={`/invoice/${invoice.id}`}
-                        style={{ textDecoration: 'none', color: 'inherit' }}
-                      >
-                        {invoice.invoiceNumber}
-                      </Link>
-                    </td>
+                  <tr
+                    key={invoice.id}
+                    onClick={() => navigate(`/invoice/${invoice.id}`)}
+                    style={{ cursor: 'pointer' }}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/invoice/${invoice.id}`); } }}
+                  >
+                    <td style={{ fontFamily: 'monospace', fontWeight: 500 }}>{invoice.invoiceNumber}</td>
                     <td>{invoice.clientName}</td>
                     <td>{formatDate(invoice.invoiceDate)}</td>
                     <td>{formatDate(invoice.dueDate)}</td>

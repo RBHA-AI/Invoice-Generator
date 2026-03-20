@@ -5,6 +5,62 @@ import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import './InvoiceGenerator.css';
 
+const GST_STATE_CODES = {
+  'jammu and kashmir': '01',
+  'himachal pradesh': '02',
+  'punjab': '03',
+  'chandigarh': '04',
+  'uttarakhand': '05',
+  'haryana': '06',
+  'delhi': '07',
+  'rajasthan': '08',
+  'uttar pradesh': '09',
+  'bihar': '10',
+  'sikkim': '11',
+  'arunachal pradesh': '12',
+  'nagaland': '13',
+  'manipur': '14',
+  'mizoram': '15',
+  'tripura': '16',
+  'meghalaya': '17',
+  'assam': '18',
+  'west bengal': '19',
+  'jharkhand': '20',
+  'orissa': '21',
+  'odisha': '21',
+  'chhattisgarh': '22',
+  'madhya pradesh': '23',
+  'gujarat': '24',
+  'dadra and nagar haveli & daman and diu': '26',
+  'dadra and nagar haveli and daman and diu': '26',
+  'maharashtra': '27',
+  'karnataka': '29',
+  'goa': '30',
+  'lakshadweep': '31',
+  'kerala': '32',
+  'tamil nadu': '33',
+  'puducherry': '34',
+  'andaman and nicobar': '35',
+  'andaman and nicobar islands': '35',
+  'telangana': '36',
+  'andhra pradesh': '37',
+  'ladakh': '38'
+};
+
+const normalizeState = (state = '') =>
+  String(state)
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const getPlaceOfSupplyFromState = (state = '') => {
+  const normalized = normalizeState(state);
+  if (!normalized) return '';
+  const code = GST_STATE_CODES[normalized];
+  if (!code) return state;
+  return `${state.trim()} (${code})`;
+};
+
 function InvoiceGenerator() {
   const [clients, setClients] = useState([]);
   const [companies, setCompanies] = useState([]);
@@ -48,15 +104,18 @@ function InvoiceGenerator() {
   const searchParams = new URLSearchParams(location.search);
   const editInvoiceIdFromQuery = searchParams.get('edit');
   const cloneInvoiceIdFromQuery = searchParams.get('clone');
-  const [mode, setMode] = useState('new'); // 'new' | 'edit' | 'clone'
-  const [editingInvoiceId, setEditingInvoiceId] = useState(null);
+  const initialMode = editInvoiceIdFromQuery ? 'edit' : cloneInvoiceIdFromQuery ? 'clone' : 'new';
+  const initialEditingInvoiceId = editInvoiceIdFromQuery || cloneInvoiceIdFromQuery || null;
+  const [mode, setMode] = useState(initialMode); // 'new' | 'edit' | 'clone'
+  const [editingInvoiceId, setEditingInvoiceId] = useState(initialEditingInvoiceId);
   
   // Get states from selected company and client
-  const companyState = (selectedCompany?.state || 'delhi').toLowerCase();
-  const clientState = (selectedClient?.state || '').toLowerCase();
+  // IMPORTANT: companies may not have state set in older data; don't default to Delhi.
+  const companyState = normalizeState(selectedCompany?.state || '');
+  const clientState = normalizeState(selectedClient?.state || '');
   
-  // Auto-detect interstate
-  const autoIsInterState = clientState && companyState !== clientState;
+  // Auto-detect interstate (requires both states)
+  const autoIsInterState = !!(clientState && companyState && companyState !== clientState);
   
   // Final tax mode decision
   const isInterState = taxMode === 'auto' ? autoIsInterState : taxMode === 'igst';
@@ -64,7 +123,10 @@ function InvoiceGenerator() {
   useEffect(() => {
     fetchClients();
     fetchCompanies();
-    generateInvoiceNumber();
+    if (initialMode !== 'edit') {
+      generateInvoiceNumber();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -143,6 +205,15 @@ function InvoiceGenerator() {
   }, [formData.clientId, clients]);
 
   useEffect(() => {
+    if (selectedClient?.state) {
+      const place = getPlaceOfSupplyFromState(selectedClient.state);
+      if (place) {
+        setFormData((prev) => ({ ...prev, placeOfSupply: place }));
+      }
+    }
+  }, [selectedClient?.state]);
+
+  useEffect(() => {
     if (formData.companyId && companies.length) {
       const company = companies.find(c => c.id === formData.companyId);
       setSelectedCompany(company || null);
@@ -170,6 +241,8 @@ function InvoiceGenerator() {
   };
 
   const generateInvoiceNumber = async () => {
+    // Never auto-generate in edit mode; preserve original invoice number.
+    if (mode === 'edit') return;
     try {
       const response = await fetch('/api/invoices/generate-number');
       if (!response.ok) throw new Error(`generate-number returned ${response.status}`);
@@ -190,8 +263,13 @@ function InvoiceGenerator() {
 
   const handleClientChange = (e) => {
     const clientId = e.target.value;
-    setFormData({ ...formData, clientId });
     const client = clients.find(c => c.id === clientId);
+    const clientPlaceOfSupply = getPlaceOfSupplyFromState(client?.state || '');
+    setFormData({
+      ...formData,
+      clientId,
+      placeOfSupply: clientPlaceOfSupply || formData.placeOfSupply
+    });
     setSelectedClient(client);
   };
 
@@ -206,7 +284,8 @@ function InvoiceGenerator() {
         bankName: company.bankName || formData.bankName,
         bankBranch: company.bankBranch || formData.bankBranch,
         bankAccount: company.bankAccount || formData.bankAccount,
-        ifsc: company.ifsc || formData.ifsc
+        ifsc: company.ifsc || formData.ifsc,
+        signatureTitle: company.signatureTitle || formData.signatureTitle
       });
     } else {
       setFormData({ ...formData, companyId });
@@ -722,9 +801,11 @@ function InvoiceGenerator() {
                 </div>
                 {taxMode === 'auto' && (selectedCompany || selectedClient) && (
                   <p style={{ fontSize: '12px', color: 'var(--text-light)', marginTop: '8px', marginBottom: 0 }}>
-                    {autoIsInterState 
-                      ? `Inter-state: ${companyState.toUpperCase()} → ${clientState.toUpperCase()} (using IGST)`
-                      : `Same state: ${companyState.toUpperCase()} (using CGST + SGST)`
+                    {(!companyState || !clientState)
+                      ? 'Select company and client states to auto-detect IGST vs CGST+SGST.'
+                      : autoIsInterState 
+                        ? `Inter-state: ${companyState.toUpperCase()} → ${clientState.toUpperCase()} (using IGST)`
+                        : `Same state: ${companyState.toUpperCase()} (using CGST + SGST)`
                     }
                   </p>
                 )}
