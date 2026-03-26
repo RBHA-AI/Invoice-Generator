@@ -8,6 +8,7 @@ import Companies from './pages/Companies';
 import InvoiceGenerator from './pages/InvoiceGenerator';
 import InvoiceView from './pages/InvoiceView';
 import Invoices from './pages/Invoices';
+import InvoiceSummaryExport from './pages/InvoiceSummaryExport';
 
 function Navigation() {
   const location = useLocation();
@@ -67,6 +68,7 @@ function App() {
         <main className="main-content">
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/invoice-summary-export" element={<InvoiceSummaryExport />} />
             <Route path="/invoices" element={<Invoices />} />
             <Route path="/companies" element={<Companies />} />
             <Route path="/clients" element={<Clients />} />

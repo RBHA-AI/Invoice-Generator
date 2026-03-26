@@ -69,7 +69,16 @@ function Dashboard() {
     });
   };
 
-  const filteredInvoices = invoices.filter((invoice) => {
+  const sortedInvoices = [...invoices].sort((a, b) => {
+    const aDate = a.invoiceDate ? Date.parse(a.invoiceDate) : 0;
+    const bDate = b.invoiceDate ? Date.parse(b.invoiceDate) : 0;
+    if (bDate !== aDate) return bDate - aDate;
+    const aCreated = a.createdAt ? Date.parse(a.createdAt) : 0;
+    const bCreated = b.createdAt ? Date.parse(b.createdAt) : 0;
+    return bCreated - aCreated;
+  });
+
+  const filteredInvoices = sortedInvoices.filter((invoice) => {
     const matchesClient = invoiceClientFilter
       ? invoice.clientId === invoiceClientFilter
       : true;
@@ -127,6 +136,27 @@ function Dashboard() {
           <div className="stat-value" style={{ fontSize: '1.5rem' }}>
             {formatCurrency(stats.pendingAmount)}
           </div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="flex items-center justify-between" style={{ gap: '1rem', flexWrap: 'wrap' }}>
+          <div>
+            <h3 style={{ 
+              fontFamily: 'Playfair Display, serif', 
+              fontSize: '1.25rem', 
+              margin: 0,
+              color: 'var(--primary)'
+            }}>
+              Export Invoice Summary
+            </h3>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '0.9rem', color: 'var(--text-light)' }}>
+              Export a monthly accountant-friendly Excel of invoices.
+            </p>
+          </div>
+          <Link to="/invoice-summary-export" className="btn btn-primary">
+            Export Summary
+          </Link>
         </div>
       </div>
 

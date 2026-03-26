@@ -55,7 +55,16 @@ function Invoices() {
     });
   };
 
-  const filteredInvoices = invoices.filter((invoice) => {
+  const sortedInvoices = [...invoices].sort((a, b) => {
+    const aDate = a.invoiceDate ? Date.parse(a.invoiceDate) : 0;
+    const bDate = b.invoiceDate ? Date.parse(b.invoiceDate) : 0;
+    if (bDate !== aDate) return bDate - aDate;
+    const aCreated = a.createdAt ? Date.parse(a.createdAt) : 0;
+    const bCreated = b.createdAt ? Date.parse(b.createdAt) : 0;
+    return bCreated - aCreated;
+  });
+
+  const filteredInvoices = sortedInvoices.filter((invoice) => {
     const matchesClient = invoiceClientFilter
       ? invoice.clientId === invoiceClientFilter
       : true;

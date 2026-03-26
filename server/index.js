@@ -5,6 +5,7 @@ const Database = require('better-sqlite3');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const multer = require('multer');
+const ExcelJS = require('exceljs');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -371,6 +372,153 @@ app.delete('/api/clients/:id', (req, res) => {
 
 // ==================== INVOICE ROUTES ====================
 
+// Export monthly invoice summary as Excel
+// Query param: month=YYYY-MM (e.g. 2026-03)
+app.get('/api/invoices/export', async (req, res) => {
+  try {
+    const month = String(req.query.month || '').trim();
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: 'Invalid month. Use YYYY-MM (e.g. 2026-03).' });
+    }
+
+    const [yearStr, monthStr] = month.split('-');
+    const year = Number(yearStr);
+    const monthNum = Number(monthStr); // 1-12
+    const start = `${yearStr}-${monthStr}-01`;
+    const endDate = new Date(Date.UTC(year, monthNum, 0)); // last day of month
+    const endDay = String(endDate.getUTCDate()).padStart(2, '0');
+    const end = `${yearStr}-${monthStr}-${endDay}`;
+
+    const rows = db.prepare(`
+      SELECT
+        i.id,
+        i.invoiceNumber,
+        i.invoiceDate,
+        i.dueDate,
+        i.placeOfSupply,
+        i.subtotal,
+        i.cgst,
+        i.sgst,
+        i.igst,
+        i.taxType,
+        i.total,
+        i.status,
+        c.name as clientName,
+        c.gstin as clientGSTIN,
+        co.name as companyName,
+        co.gstin as companyGSTIN
+      FROM invoices i
+      LEFT JOIN clients c ON i.clientId = c.id
+      LEFT JOIN companies co ON i.companyId = co.id
+      WHERE i.invoiceDate >= ? AND i.invoiceDate <= ?
+      ORDER BY i.invoiceDate DESC, i.createdAt DESC
+    `).all(start, end);
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = 'Invoice Generator';
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet(`Invoices ${month}`, {
+      views: [{ state: 'frozen', ySplit: 1 }]
+    });
+
+    sheet.columns = [
+      { header: 'Invoice Number', key: 'invoiceNumber', width: 22 },
+      { header: 'Invoice Date', key: 'invoiceDate', width: 14 },
+      { header: 'Due Date', key: 'dueDate', width: 14 },
+      { header: 'Status', key: 'status', width: 10 },
+      { header: 'Client Name', key: 'clientName', width: 28 },
+      { header: 'Client GSTIN', key: 'clientGSTIN', width: 18 },
+      { header: 'Company Name', key: 'companyName', width: 28 },
+      { header: 'Company GSTIN', key: 'companyGSTIN', width: 18 },
+      { header: 'Place of Supply', key: 'placeOfSupply', width: 20 },
+      { header: 'Tax Type', key: 'taxType', width: 12 },
+      { header: 'Subtotal', key: 'subtotal', width: 14, style: { numFmt: '#,##0.00' } },
+      { header: 'CGST', key: 'cgst', width: 12, style: { numFmt: '#,##0.00' } },
+      { header: 'SGST', key: 'sgst', width: 12, style: { numFmt: '#,##0.00' } },
+      { header: 'IGST', key: 'igst', width: 12, style: { numFmt: '#,##0.00' } },
+      { header: 'Total', key: 'total', width: 14, style: { numFmt: '#,##0.00' } }
+    ];
+
+    // Header styling
+    sheet.getRow(1).font = { bold: true };
+    sheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    sheet.getRow(1).height = 20;
+
+    rows.forEach((r) => {
+      sheet.addRow({
+        invoiceNumber: r.invoiceNumber,
+        invoiceDate: r.invoiceDate,
+        dueDate: r.dueDate,
+        status: r.status,
+        clientName: r.clientName,
+        clientGSTIN: r.clientGSTIN,
+        companyName: r.companyName,
+        companyGSTIN: r.companyGSTIN,
+        placeOfSupply: r.placeOfSupply,
+        taxType: r.taxType,
+        subtotal: r.subtotal || 0,
+        cgst: r.cgst || 0,
+        sgst: r.sgst || 0,
+        igst: r.igst || 0,
+        total: r.total || 0
+      });
+    });
+
+    // Borders + alignment
+    sheet.eachRow((row, rowNumber) => {
+      row.eachCell((cell) => {
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+          left: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+          bottom: { style: 'thin', color: { argb: 'FFCBD5E1' } },
+          right: { style: 'thin', color: { argb: 'FFCBD5E1' } }
+        };
+        if (rowNumber > 1) {
+          cell.alignment = { vertical: 'top', horizontal: 'left', wrapText: true };
+        }
+      });
+    });
+
+    const estimateLines = (text, colWidth) => {
+      const s = String(text || '');
+      if (!s) return 1;
+      const width = Math.max(8, Number(colWidth) || 10);
+      const approxCharsPerLine = Math.floor(width * 1.05);
+      return Math.max(1, Math.ceil(s.length / approxCharsPerLine));
+    };
+
+    // Dynamic row heights so long client/company names remain visible
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const clientName = row.getCell('clientName').value;
+      const companyName = row.getCell('companyName').value;
+      const place = row.getCell('placeOfSupply').value;
+      const lines = Math.max(
+        estimateLines(clientName, sheet.getColumn('clientName').width),
+        estimateLines(companyName, sheet.getColumn('companyName').width),
+        estimateLines(place, sheet.getColumn('placeOfSupply').width)
+      );
+      row.height = Math.min(80, 16 + (lines - 1) * 14);
+    });
+
+    // Auto-filter
+    sheet.autoFilter = {
+      from: { row: 1, column: 1 },
+      to: { row: 1, column: sheet.columns.length }
+    };
+
+    const filename = `invoice-summary-${month}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get all invoices
 app.get('/api/invoices', (req, res) => {
   try {
@@ -378,7 +526,7 @@ app.get('/api/invoices', (req, res) => {
       SELECT i.*, c.name as clientName 
       FROM invoices i 
       LEFT JOIN clients c ON i.clientId = c.id 
-      ORDER BY i.createdAt DESC
+      ORDER BY i.invoiceDate DESC, i.createdAt DESC
     `).all();
     res.json(invoices);
   } catch (error) {
