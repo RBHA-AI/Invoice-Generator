@@ -3,6 +3,7 @@ import { Plus, Edit2, Trash2, X } from 'lucide-react';
 
 function Companies() {
   const [companies, setCompanies] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingCompany, setEditingCompany] = useState(null);
   const [formData, setFormData] = useState({
@@ -162,6 +163,22 @@ function Companies() {
     });
   };
 
+  const filteredCompanies = [...companies]
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }))
+    .filter((company) => {
+      const q = searchQuery.trim().toLowerCase();
+      if (!q) return true;
+      return (
+        String(company.name || '').toLowerCase().includes(q) ||
+        String(company.gstin || '').toLowerCase().includes(q) ||
+        String(company.msmeNumber || '').toLowerCase().includes(q) ||
+        String(company.email || '').toLowerCase().includes(q) ||
+        String(company.phone || '').toLowerCase().includes(q) ||
+        String(company.bankName || '').toLowerCase().includes(q) ||
+        String(company.ifsc || '').toLowerCase().includes(q)
+      );
+    });
+
   return (
     <div>
       <div className="page-header flex items-center justify-between">
@@ -176,6 +193,15 @@ function Companies() {
       </div>
 
       <div className="card">
+        <div className="form-group" style={{ marginBottom: '1rem' }}>
+          <input
+            type="text"
+            className="form-input"
+            placeholder="Search companies by name, GSTIN, MSME, email, phone, bank..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
         <div className="table-container">
           <table className="table">
             <thead>
@@ -194,14 +220,16 @@ function Companies() {
               </tr>
             </thead>
             <tbody>
-              {companies.length === 0 ? (
+              {filteredCompanies.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="text-center" style={{ padding: '3rem', color: 'var(--text-light)' }}>
-                    No companies found. Add your first company to get started.
+                  <td colSpan="11" className="text-center" style={{ padding: '3rem', color: 'var(--text-light)' }}>
+                    {companies.length === 0
+                      ? 'No companies found. Add your first company to get started.'
+                      : 'No companies match your search.'}
                   </td>
                 </tr>
               ) : (
-                companies.map(company => (
+                filteredCompanies.map(company => (
                   <tr key={company.id}>
                     <td>
                       {company.logo ? (

@@ -4,16 +4,24 @@ const bodyParser = require('body-parser');
 const Database = require('better-sqlite3');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
+const fs = require('fs');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Paths are anchored to this file so the app works from any cwd (PM2, systemd, etc.).
+const PROJECT_ROOT = path.join(__dirname, '..');
+const DB_PATH = process.env.INVOICES_DB_PATH || path.join(PROJECT_ROOT, 'invoices.db');
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+const UPLOADS_LOGOS_DIR = path.join(UPLOADS_DIR, 'logos');
+fs.mkdirSync(UPLOADS_LOGOS_DIR, { recursive: true });
+
 // Configure multer for logo uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, './server/uploads/logos');
+    cb(null, UPLOADS_LOGOS_DIR);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -39,10 +47,71 @@ app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, '../client/build')));
-app.use('/uploads', express.static('./server/uploads'));
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 // Initialize SQLite Database
-const db = new Database('invoices.db');
+const db = new Database(DB_PATH);
+
+const migrateInvoiceUniquenessPerCompany = () => {
+  const invoiceTableSqlRow = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'invoices'")
+    .get();
+  const invoiceTableSql = String(invoiceTableSqlRow?.sql || '').toUpperCase();
+
+  // If legacy schema has global UNIQUE on invoiceNumber, rebuild table.
+  if (invoiceTableSql.includes('INVOICENUMBER TEXT UNIQUE')) {
+    const tx = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS invoices_new (
+          id TEXT PRIMARY KEY,
+          invoiceNumber TEXT NOT NULL,
+          clientId TEXT NOT NULL,
+          companyId TEXT,
+          invoiceDate TEXT NOT NULL,
+          dueDate TEXT NOT NULL,
+          placeOfSupply TEXT,
+          bankName TEXT,
+          bankBranch TEXT,
+          bankAccount TEXT,
+          ifsc TEXT,
+          subtotal REAL,
+          cgst REAL,
+          sgst REAL,
+          igst REAL DEFAULT 0,
+          taxType TEXT,
+          total REAL,
+          status TEXT DEFAULT 'draft',
+          signatureTitle TEXT DEFAULT 'PARTNER',
+          createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (clientId) REFERENCES clients(id),
+          FOREIGN KEY (companyId) REFERENCES companies(id)
+        );
+      `);
+
+      db.exec(`
+        INSERT INTO invoices_new (
+          id, invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName,
+          bankBranch, bankAccount, ifsc, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle, createdAt
+        )
+        SELECT
+          id, invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName,
+          bankBranch, bankAccount, ifsc, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle, createdAt
+        FROM invoices;
+      `);
+
+      db.exec('DROP TABLE invoices;');
+      db.exec('ALTER TABLE invoices_new RENAME TO invoices;');
+    });
+
+    tx();
+  }
+
+  // Enforce uniqueness by company + invoiceNumber (companyId NULL treated as empty string bucket).
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_company_invoice_unique
+    ON invoices (COALESCE(companyId, ''), invoiceNumber);
+  `);
+};
 
 // Ensure new columns exist for existing databases (safe ALTERs)
 try {
@@ -180,6 +249,8 @@ db.exec(`
     FOREIGN KEY (invoiceId) REFERENCES invoices(id) ON DELETE CASCADE
   );
 `);
+
+migrateInvoiceUniquenessPerCompany();
 
 // ==================== COMPANY ROUTES ====================
 
@@ -372,6 +443,35 @@ app.delete('/api/clients/:id', (req, res) => {
 
 // ==================== INVOICE ROUTES ====================
 
+/** Text cells for monthly export: main line text, optional long description, qty/rate/amount/HSN per line */
+function buildLineItemExportColumns(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) {
+    return { titles: '', details: '', figures: '' };
+  }
+  const titles = [];
+  const details = [];
+  const figures = [];
+  list.forEach((it, i) => {
+    const n = i + 1;
+    titles.push(`${n}. ${String(it.description || '').trim()}`);
+    const det = String(it.detailedDescription || '').trim();
+    details.push(det ? `${n}. ${det}` : `${n}. —`);
+    const hsn = it.hsnSac ? `HSN/SAC ${it.hsnSac}` : '';
+    const qty = it.quantity ?? '';
+    const rate = Number(it.rate || 0).toFixed(2);
+    const amt = Number(it.amount || 0).toFixed(2);
+    figures.push(
+      `${n}. ${hsn ? `${hsn} | ` : ''}Qty ${qty} | Rate ${rate} | Amount ${amt}`
+    );
+  });
+  return {
+    titles: titles.join('\n'),
+    details: details.join('\n'),
+    figures: figures.join('\n')
+  };
+}
+
 // Export monthly invoice summary as Excel
 // Query param: month=YYYY-MM (e.g. 2026-03)
 app.get('/api/invoices/export', async (req, res) => {
@@ -414,6 +514,24 @@ app.get('/api/invoices/export', async (req, res) => {
       ORDER BY i.invoiceDate DESC, i.createdAt DESC
     `).all(start, end);
 
+    const itemsByInvoiceId = new Map();
+    if (rows.length > 0) {
+      const ph = rows.map(() => '?').join(',');
+      const allItems = db
+        .prepare(
+          `SELECT invoiceId, description, detailedDescription, hsnSac, quantity, rate, amount
+           FROM invoice_items WHERE invoiceId IN (${ph}) ORDER BY invoiceId, rowid`
+        )
+        .all(...rows.map((r) => r.id));
+      for (const r of rows) {
+        itemsByInvoiceId.set(r.id, []);
+      }
+      for (const it of allItems) {
+        const bucket = itemsByInvoiceId.get(it.invoiceId);
+        if (bucket) bucket.push(it);
+      }
+    }
+
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'Invoice Generator';
     workbook.created = new Date();
@@ -432,6 +550,9 @@ app.get('/api/invoices/export', async (req, res) => {
       { header: 'Company Name', key: 'companyName', width: 28 },
       { header: 'Company GSTIN', key: 'companyGSTIN', width: 18 },
       { header: 'Place of Supply', key: 'placeOfSupply', width: 20 },
+      { header: 'Line item (title)', key: 'lineItemTitles', width: 36 },
+      { header: 'Line item (description)', key: 'lineItemDetails', width: 40 },
+      { header: 'Line item (HSN / Qty / Rate / Amount)', key: 'lineItemFigures', width: 38 },
       { header: 'Tax Type', key: 'taxType', width: 12 },
       { header: 'Subtotal', key: 'subtotal', width: 14, style: { numFmt: '#,##0.00' } },
       { header: 'CGST', key: 'cgst', width: 12, style: { numFmt: '#,##0.00' } },
@@ -446,6 +567,7 @@ app.get('/api/invoices/export', async (req, res) => {
     sheet.getRow(1).height = 20;
 
     rows.forEach((r) => {
+      const lineCols = buildLineItemExportColumns(itemsByInvoiceId.get(r.id) || []);
       sheet.addRow({
         invoiceNumber: r.invoiceNumber,
         invoiceDate: r.invoiceDate,
@@ -456,6 +578,9 @@ app.get('/api/invoices/export', async (req, res) => {
         companyName: r.companyName,
         companyGSTIN: r.companyGSTIN,
         placeOfSupply: r.placeOfSupply,
+        lineItemTitles: lineCols.titles,
+        lineItemDetails: lineCols.details,
+        lineItemFigures: lineCols.figures,
         taxType: r.taxType,
         subtotal: r.subtotal || 0,
         cgst: r.cgst || 0,
@@ -494,10 +619,16 @@ app.get('/api/invoices/export', async (req, res) => {
       const clientName = row.getCell('clientName').value;
       const companyName = row.getCell('companyName').value;
       const place = row.getCell('placeOfSupply').value;
+      const lineTitles = row.getCell('lineItemTitles').value;
+      const lineDetails = row.getCell('lineItemDetails').value;
+      const lineFigures = row.getCell('lineItemFigures').value;
       const lines = Math.max(
         estimateLines(clientName, sheet.getColumn('clientName').width),
         estimateLines(companyName, sheet.getColumn('companyName').width),
-        estimateLines(place, sheet.getColumn('placeOfSupply').width)
+        estimateLines(place, sheet.getColumn('placeOfSupply').width),
+        estimateLines(lineTitles, sheet.getColumn('lineItemTitles').width),
+        estimateLines(lineDetails, sheet.getColumn('lineItemDetails').width),
+        estimateLines(lineFigures, sheet.getColumn('lineItemFigures').width)
       );
       row.height = Math.min(80, 16 + (lines - 1) * 14);
     });
@@ -576,11 +707,12 @@ app.get('/api/invoices/generate-number', (req, res) => {
   }
 });
 
-// Get single invoice with items
+// Get single invoice with items (avoid SELECT i.*, c.* — duplicate column names
+// overwrite invoice id with client id and omit clientName expected by the UI)
 app.get('/api/invoices/:id', (req, res) => {
   try {
     const invoice = db.prepare(`
-      SELECT i.*, c.* 
+      SELECT i.*, c.name as clientName 
       FROM invoices i 
       LEFT JOIN clients c ON i.clientId = c.id 
       WHERE i.id = ?
@@ -648,6 +780,15 @@ app.put('/api/invoices/:id', (req, res) => {
       status,
       signatureTitle
     } = req.body;
+    const normalizedInvoiceNumber = String(invoiceNumber || '').trim();
+    if (!normalizedInvoiceNumber) {
+      return res.status(400).json({ error: 'Invoice number is required' });
+    }
+    // Replacing line items with an empty list used to happen when older clients sent PUT without `items`,
+    // which wiped rows while totals stayed — reject empty arrays explicitly.
+    if (Array.isArray(items) && items.length < 1) {
+      return res.status(400).json({ error: 'At least one line item is required when updating line items' });
+    }
 
     const tx = db.transaction(() => {
       const updateStmt = db.prepare(`
@@ -659,7 +800,7 @@ app.put('/api/invoices/:id', (req, res) => {
       `);
 
       updateStmt.run(
-        invoiceNumber,
+        normalizedInvoiceNumber,
         clientId,
         companyId || null,
         invoiceDate,
@@ -680,9 +821,11 @@ app.put('/api/invoices/:id', (req, res) => {
         req.params.id
       );
 
-      db.prepare('DELETE FROM invoice_items WHERE invoiceId = ?').run(req.params.id);
-
+      // Only replace line items when the body includes an items array.
+      // Otherwise a partial PUT would delete all rows and leave totals inconsistent.
       if (Array.isArray(items)) {
+        db.prepare('DELETE FROM invoice_items WHERE invoiceId = ?').run(req.params.id);
+
         const itemStmt = db.prepare(`
           INSERT INTO invoice_items (id, invoiceId, description, detailedDescription, hsnSac, quantity, rate, cgstPercent, sgstPercent, amount)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -708,7 +851,7 @@ app.put('/api/invoices/:id', (req, res) => {
     tx();
 
     const invoice = db.prepare(`
-      SELECT i.*, c.* 
+      SELECT i.*, c.name as clientName 
       FROM invoices i 
       LEFT JOIN clients c ON i.clientId = c.id 
       WHERE i.id = ?
@@ -719,7 +862,7 @@ app.put('/api/invoices/:id', (req, res) => {
     res.json({ ...invoice, items: savedItems });
   } catch (error) {
     if (error && error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-      return res.status(409).json({ error: 'Invoice number must be unique' });
+      return res.status(409).json({ error: 'Invoice number already exists for this company' });
     }
     res.status(500).json({ error: error.message });
   }
@@ -729,6 +872,13 @@ app.put('/api/invoices/:id', (req, res) => {
 app.post('/api/invoices', (req, res) => {
   try {
     const { invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName, bankBranch, bankAccount, ifsc, items, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle } = req.body;
+    const normalizedInvoiceNumber = String(invoiceNumber || '').trim();
+    if (!normalizedInvoiceNumber) {
+      return res.status(400).json({ error: 'Invoice number is required' });
+    }
+    if (!Array.isArray(items) || items.length < 1) {
+      return res.status(400).json({ error: 'At least one line item is required' });
+    }
     const invoiceId = uuidv4();
     
     // Insert invoice
@@ -737,7 +887,7 @@ app.post('/api/invoices', (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
-    invoiceStmt.run(invoiceId, invoiceNumber, clientId, companyId || null, invoiceDate, dueDate, placeOfSupply, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, subtotal, cgst, sgst, igst || 0, taxType || null, total, status || 'draft', signatureTitle || 'PARTNER');
+    invoiceStmt.run(invoiceId, normalizedInvoiceNumber, clientId, companyId || null, invoiceDate, dueDate, placeOfSupply, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, subtotal, cgst, sgst, igst || 0, taxType || null, total, status || 'draft', signatureTitle || 'PARTNER');
     
     // Insert items
     const itemStmt = db.prepare(`
@@ -750,7 +900,7 @@ app.post('/api/invoices', (req, res) => {
     });
     
     const invoice = db.prepare(`
-      SELECT i.*, c.* 
+      SELECT i.*, c.name as clientName 
       FROM invoices i 
       LEFT JOIN clients c ON i.clientId = c.id 
       WHERE i.id = ?
@@ -760,6 +910,9 @@ app.post('/api/invoices', (req, res) => {
     
     res.status(201).json({ ...invoice, items: savedItems });
   } catch (error) {
+    if (error && error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return res.status(409).json({ error: 'Invoice number already exists for this company' });
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -771,5 +924,5 @@ app.get('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📊 Database: invoices.db`);
+  console.log(`📊 Database: ${DB_PATH}`);
 });

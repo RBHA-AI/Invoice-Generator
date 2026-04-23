@@ -1,0 +1,9 @@
+tunnel: 0666c4fd-373e-4fa2-9549-5f95a8c82ba2
+credentials-file: /etc/cloudflared/0666c4fd-373e-4fa2-9549-5f95a8c82ba2.json
+
+ingress:
+  - hostname: invoice.invoicecreation.store
+    service: http://localhost:5000
+  - hostname: track.invoicecreation.store
+    service: http://localhost:80
+  - service: http_status:404

@@ -61,6 +61,116 @@ const getPlaceOfSupplyFromState = (state = '') => {
   return `${state.trim()} (${code})`;
 };
 
+function SearchableDropdown({
+  value,
+  options,
+  placeholder,
+  onSelect
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const wrapperRef = useRef(null);
+
+  const selectedOption = options.find((opt) => opt.id === value) || null;
+  const filteredOptions = options.filter((opt) =>
+    String(opt.name || '').toLowerCase().includes(query.trim().toLowerCase())
+  );
+
+  useEffect(() => {
+    const onDocClick = (event) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  const handleSelect = (id) => {
+    onSelect(id);
+    setIsOpen(false);
+    setQuery('');
+  };
+
+  return (
+    <div ref={wrapperRef} style={{ position: 'relative' }}>
+      <button
+        type="button"
+        className="form-select"
+        onClick={() => setIsOpen((prev) => !prev)}
+        style={{ textAlign: 'left', cursor: 'pointer' }}
+      >
+        {selectedOption ? selectedOption.name : placeholder}
+      </button>
+      {isOpen && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 4px)',
+            left: 0,
+            right: 0,
+            zIndex: 30,
+            background: '#fff',
+            border: '1px solid var(--border)',
+            borderRadius: '8px',
+            boxShadow: '0 8px 20px rgba(0,0,0,0.08)',
+            padding: '8px'
+          }}
+        >
+          <input
+            type="text"
+            className="form-input"
+            placeholder="Search..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            autoFocus
+          />
+          <div style={{ marginTop: '8px', maxHeight: '220px', overflowY: 'auto' }}>
+            <button
+              type="button"
+              onClick={() => handleSelect('')}
+              style={{
+                width: '100%',
+                textAlign: 'left',
+                border: 'none',
+                background: 'transparent',
+                padding: '8px',
+                borderRadius: '6px',
+                cursor: 'pointer'
+              }}
+            >
+              {placeholder}
+            </button>
+            {filteredOptions.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => handleSelect(opt.id)}
+                style={{
+                  width: '100%',
+                  textAlign: 'left',
+                  border: 'none',
+                  background: 'transparent',
+                  padding: '8px',
+                  borderRadius: '6px',
+                  cursor: 'pointer'
+                }}
+              >
+                {opt.name}
+              </button>
+            ))}
+            {filteredOptions.length === 0 && (
+              <div style={{ padding: '8px', color: 'var(--text-light)', fontSize: '13px' }}>
+                No matches found.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InvoiceGenerator() {
   const [clients, setClients] = useState([]);
   const [companies, setCompanies] = useState([]);
@@ -98,6 +208,7 @@ function InvoiceGenerator() {
   const [selectedClient, setSelectedClient] = useState(null);
   const [selectedCompany, setSelectedCompany] = useState(null);
   const [taxMode, setTaxMode] = useState('auto'); // 'auto', 'igst', 'cgst_sgst'
+  const [amountInWordsCurrency, setAmountInWordsCurrency] = useState('inr'); // 'inr' | 'aud'
   const invoicePreviewRef = useRef(null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -142,12 +253,6 @@ function InvoiceGenerator() {
     }
   }, [editInvoiceIdFromQuery, cloneInvoiceIdFromQuery]);
   
-  useEffect(() => {
-    if (!invoiceNumber) {
-      setInvoiceNumber(`INV/${Date.now()}`);
-    }
-  }, [invoiceNumber]);
-
   useEffect(() => {
     const loadInvoiceForEditing = async () => {
       if (!editingInvoiceId) return;
@@ -261,8 +366,10 @@ function InvoiceGenerator() {
     }
   };
 
-  const handleClientChange = (e) => {
-    const clientId = e.target.value;
+  const handleClientChange = (clientIdOrEvent) => {
+    const clientId = typeof clientIdOrEvent === 'string'
+      ? clientIdOrEvent
+      : clientIdOrEvent.target.value;
     const client = clients.find(c => c.id === clientId);
     const clientPlaceOfSupply = getPlaceOfSupplyFromState(client?.state || '');
     setFormData({
@@ -273,8 +380,10 @@ function InvoiceGenerator() {
     setSelectedClient(client);
   };
 
-  const handleCompanyChange = (e) => {
-    const companyId = e.target.value;
+  const handleCompanyChange = (companyIdOrEvent) => {
+    const companyId = typeof companyIdOrEvent === 'string'
+      ? companyIdOrEvent
+      : companyIdOrEvent.target.value;
     const company = companies.find(c => c.id === companyId);
     // If company exists and has bank details, prefill them
     if (company) {
@@ -306,6 +415,24 @@ function InvoiceGenerator() {
     setFormData({ ...formData, items: newItems });
   };
 
+  const addItem = () => {
+    setFormData({
+      ...formData,
+      items: [
+        ...formData.items,
+        {
+          description: '',
+          detailedDescription: '',
+          hsnSac: '',
+          quantity: 1,
+          rate: 0,
+          cgstPercent: 9,
+          sgstPercent: 9
+        }
+      ]
+    });
+  };
+
 
   const removeItem = (index) => {
     const newItems = formData.items.filter((_, i) => i !== index);
@@ -327,7 +454,10 @@ function InvoiceGenerator() {
   };
 
   const calculateItemIGST = (item) => {
-    const igst = (parseFloat(item.cgstPercent) || 0) + (parseFloat(item.sgstPercent) || 0);
+    const igst =
+      item.igstPercent !== undefined && item.igstPercent !== null && item.igstPercent !== ''
+        ? parseFloat(item.igstPercent) || 0
+        : (parseFloat(item.cgstPercent) || 0) + (parseFloat(item.sgstPercent) || 0);
     return (calculateItemAmount(item) * igst) / 100;
   };
 
@@ -390,6 +520,8 @@ function InvoiceGenerator() {
     }).format(amount);
   };
 
+  const selectedCurrencySymbol = amountInWordsCurrency === 'aud' ? '$' : '₹';
+
   const saveInvoice = async () => {
     if (!formData.clientId) {
       alert('Please select a client');
@@ -400,13 +532,25 @@ function InvoiceGenerator() {
     if (!invoiceNumber) {
       await generateInvoiceNumber();
     }
+    const normalizedInvoiceNumber = String(invoiceNumber || '').trim();
+    if (!normalizedInvoiceNumber) {
+      alert('Please enter a valid invoice number');
+      return;
+    }
+    if (normalizedInvoiceNumber !== invoiceNumber) {
+      setInvoiceNumber(normalizedInvoiceNumber);
+    }
 
     // Check for duplicate invoice number and offer to auto-generate (for new/clone)
     try {
       const allRes = await fetch('/api/invoices');
       if (allRes.ok) {
         const allInvoices = await allRes.json();
-        const existingWithNumber = allInvoices.find(inv => String(inv.invoiceNumber) === String(invoiceNumber));
+        const normalizedCompanyId = String(formData.companyId || '');
+        const existingWithNumber = allInvoices.find(inv =>
+          String(inv.invoiceNumber || '').trim() === normalizedInvoiceNumber &&
+          String(inv.companyId || '') === normalizedCompanyId
+        );
 
         const isEditingSameInvoice =
           mode === 'edit' &&
@@ -440,7 +584,7 @@ function InvoiceGenerator() {
     }
 
     const invoiceData = {
-      invoiceNumber,
+      invoiceNumber: normalizedInvoiceNumber,
       clientId: formData.clientId,
       companyId: formData.companyId,
       invoiceDate: formData.invoiceDate,
@@ -522,8 +666,13 @@ function InvoiceGenerator() {
       const fullWidth = element.scrollWidth || element.offsetWidth;
       const fullHeight = element.scrollHeight || element.offsetHeight;
 
+      // Higher scale + JPEG quality = sharper text (target ~90–200 KB typical single-page invoice)
+      const captureScale = Math.min(
+        2.25,
+        Math.max(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 2)
+      );
       const canvas = await html2canvas(element, {
-        scale: 2,
+        scale: captureScale,
         useCORS: true,
         logging: false,
         backgroundColor: '#ffffff',
@@ -532,8 +681,7 @@ function InvoiceGenerator() {
         allowTaint: true
       });
       
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
       
@@ -543,28 +691,39 @@ function InvoiceGenerator() {
       
       // Calculate dimensions to fit on A4 within margins
       const imgWidth = pdfWidth - margin * 2;
-      const imgHeight = (canvas.height * imgWidth) / canvas.width;
-      
-      // Handle multi-page PDFs
-      let position = margin;
-      if (imgHeight > usablePageHeight) {
-        // Multiple pages needed
-        let heightLeft = imgHeight;
-        while (heightLeft > 0) {
-          pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
-          heightLeft -= usablePageHeight;
-          position -= usablePageHeight;
-          if (heightLeft > 0) {
-            pdf.addPage();
-            position = margin;
-          }
+      const mmPerPx = imgWidth / canvas.width;
+      const pageSlicePx = Math.floor(usablePageHeight / mmPerPx);
+      let yOffsetPx = 0;
+      let pageIndex = 0;
+
+      while (yOffsetPx < canvas.height) {
+        const sliceHeightPx = Math.min(pageSlicePx, canvas.height - yOffsetPx);
+        const pageCanvas = document.createElement('canvas');
+        pageCanvas.width = canvas.width;
+        pageCanvas.height = sliceHeightPx;
+
+        const pageCtx = pageCanvas.getContext('2d');
+        // 1:1 slice copy — disable smoothing to keep edges crisp
+        pageCtx.imageSmoothingEnabled = false;
+        pageCtx.drawImage(
+          canvas,
+          0, yOffsetPx, canvas.width, sliceHeightPx,
+          0, 0, canvas.width, sliceHeightPx
+        );
+
+        const sliceHeightMm = sliceHeightPx * mmPerPx;
+        const pageImg = pageCanvas.toDataURL('image/jpeg', 0.88);
+
+        if (pageIndex > 0) {
+          pdf.addPage();
         }
-      } else {
-        // Single page
-        pdf.addImage(imgData, 'PNG', margin, margin, imgWidth, imgHeight);
-        // Draw a crisp vector border around the full invoice area
-        pdf.setLineWidth(0.5);
-        pdf.rect(margin, margin, imgWidth, imgHeight);
+
+        pdf.addImage(pageImg, 'JPEG', margin, margin, imgWidth, sliceHeightMm, undefined, 'MEDIUM');
+        pdf.setLineWidth(0.4);
+        pdf.rect(margin, margin, imgWidth, sliceHeightMm);
+
+        yOffsetPx += sliceHeightPx;
+        pageIndex += 1;
       }
       
       const safeInvoiceNumber = String(invoiceNumber).replace(/[^\w-]+/g, '-');
@@ -610,35 +769,22 @@ function InvoiceGenerator() {
 
             <div className="form-group">
               <label className="form-label">Company <span className="required">*</span></label>
-              <select
-                className="form-select"
+              <SearchableDropdown
                 value={formData.companyId}
-                onChange={handleCompanyChange}
-              >
-                <option value="">Select a company</option>
-                {companies.map(company => (
-                  <option key={company.id} value={company.id}>
-                    {company.name}
-                  </option>
-                ))}
-              </select>
+                options={companies}
+                placeholder="Select a company"
+                onSelect={handleCompanyChange}
+              />
             </div>
 
             <div className="form-group">
               <label className="form-label">Client <span className="required">*</span></label>
-              <select
-                className="form-select"
+              <SearchableDropdown
                 value={formData.clientId}
-                onChange={handleClientChange}
-                required
-              >
-                <option value="">Select a client</option>
-                {clients.map(client => (
-                  <option key={client.id} value={client.id}>
-                    {client.name}
-                  </option>
-                ))}
-              </select>
+                options={clients}
+                placeholder="Select a client"
+                onSelect={handleClientChange}
+              />
             </div>
 
             <div className="form-grid">
@@ -810,10 +956,64 @@ function InvoiceGenerator() {
                   </p>
                 )}
               </div>
+
+              <div className="form-group">
+                <label className="form-label">Amount In Words Currency</label>
+                <div style={{
+                  display: 'flex',
+                  gap: '8px',
+                  padding: '4px',
+                  background: '#f0f0f0',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border)'
+                }}>
+                  <button
+                    type="button"
+                    onClick={() => setAmountInWordsCurrency('inr')}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      border: 'none',
+                      borderRadius: '6px',
+                      background: amountInWordsCurrency === 'inr' ? 'var(--accent)' : 'transparent',
+                      color: amountInWordsCurrency === 'inr' ? 'white' : 'var(--text)',
+                      fontWeight: amountInWordsCurrency === 'inr' ? '600' : '500',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      fontSize: '14px'
+                    }}
+                  >
+                    Indian Rupee
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAmountInWordsCurrency('aud')}
+                    style={{
+                      flex: 1,
+                      padding: '10px',
+                      border: 'none',
+                      borderRadius: '6px',
+                      background: amountInWordsCurrency === 'aud' ? 'var(--accent)' : 'transparent',
+                      color: amountInWordsCurrency === 'aud' ? 'white' : 'var(--text)',
+                      fontWeight: amountInWordsCurrency === 'aud' ? '600' : '500',
+                      cursor: 'pointer',
+                      transition: 'all 0.2s ease',
+                      fontSize: '14px'
+                    }}
+                  >
+                    Australian Dollar
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="card">
-              <h3 className="section-title">Line Items</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h3 className="section-title" style={{ marginBottom: 0 }}>Line Items</h3>
+                <button type="button" className="btn btn-secondary" onClick={addItem}>
+                  + Add Item
+                </button>
+              </div>
 
             {formData.items.map((item, index) => (
               <div key={index} className="item-row">
@@ -1081,7 +1281,12 @@ function InvoiceGenerator() {
                     {selectedClient.city && <>{selectedClient.city}</>}
                     {selectedClient.state && <>, {selectedClient.state}</>}
                     {selectedClient.pincode && <>, {selectedClient.pincode}</>}
-                    <br />India
+                    {amountInWordsCurrency !== 'aud' && (
+                      <>
+                        <br />
+                        India
+                      </>
+                    )}
                   </div>
                   {selectedClient.gstin && (
                     <div className="client-gstin">GSTIN {selectedClient.gstin}</div>
@@ -1132,7 +1337,9 @@ function InvoiceGenerator() {
                       {isInterState ? (
                         <>
                           <td style={{ textAlign: 'right' }}>
-                            {((parseFloat(item.cgstPercent)||0)+(parseFloat(item.sgstPercent)||0))}%
+                            {(item.igstPercent !== undefined && item.igstPercent !== null && item.igstPercent !== '')
+                              ? (parseFloat(item.igstPercent) || 0)
+                              : ((parseFloat(item.cgstPercent) || 0) + (parseFloat(item.sgstPercent) || 0))}%
                           </td>
                           <td style={{ textAlign: 'right' }}>
                             {formatCurrency(calculateItemIGST(item))}
@@ -1160,7 +1367,9 @@ function InvoiceGenerator() {
                   {/* Total in Words */}
                   <div className="total-words">
                     <strong>Total In Words</strong><br />
-                    <em>Indian Rupee {numberToWords(Math.floor(calculateTotal()))} Only</em>
+                    <em>
+                      {amountInWordsCurrency === 'aud' ? 'Australian Dollar' : 'Indian Rupee'} {numberToWords(Math.floor(calculateTotal()))} Only
+                    </em>
                   </div>
 
                   {/* Notes */}
@@ -1214,11 +1423,11 @@ function InvoiceGenerator() {
                       )}
                       <tr className="total-row">
                         <td><strong>Total</strong></td>
-                        <td className="amount-cell"><strong>₹{formatCurrency(calculateTotal())}</strong></td>
+                        <td className="amount-cell"><strong>{selectedCurrencySymbol}{formatCurrency(calculateTotal())}</strong></td>
                       </tr>
                       <tr className="balance-row">
                         <td><strong>Balance Due</strong></td>
-                        <td className="amount-cell"><strong>₹{formatCurrency(calculateTotal())}</strong></td>
+                        <td className="amount-cell"><strong>{selectedCurrencySymbol}{formatCurrency(calculateTotal())}</strong></td>
                       </tr>
                     </tbody>
                   </table>

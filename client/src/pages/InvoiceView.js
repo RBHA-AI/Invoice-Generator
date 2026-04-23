@@ -211,19 +211,37 @@ function InvoiceView() {
               </tr>
             </thead>
             <tbody>
-              {items.map((it, idx) => (
-                <tr key={it.id || idx}>
-                  <td>{idx + 1}</td>
-                  <td>{it.description}</td>
-                  <td>{parseFloat(it.quantity || 0).toFixed(2)}</td>
-                  <td style={{ textAlign: 'right' }}>
-                    {formatCurrency(parseFloat(it.rate || 0))}
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    {formatCurrency(parseFloat(it.amount || 0))}
+              {items.length === 0 && invoice.total > 0 && (
+                <tr>
+                  <td colSpan={5} style={{ color: 'var(--text-light)', fontSize: '0.9rem' }}>
+                    No line items are stored for this invoice (totals may be from an older save). Open{' '}
+                    <strong>Edit</strong> and re-enter the lines, then save to restore them.
                   </td>
                 </tr>
-              ))}
+              )}
+              {items.map((it, idx) => {
+                const desc = [it.description, it.detailedDescription].filter(Boolean).join(' — ');
+                return (
+                  <tr key={it.id || idx}>
+                    <td>{idx + 1}</td>
+                    <td>
+                      {desc || '—'}
+                      {it.hsnSac ? (
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-light)', marginTop: '0.25rem' }}>
+                          HSN/SAC: {it.hsnSac}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td>{parseFloat(it.quantity || 0).toFixed(2)}</td>
+                    <td style={{ textAlign: 'right' }}>
+                      {formatCurrency(parseFloat(it.rate || 0))}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {formatCurrency(parseFloat(it.amount || 0))}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

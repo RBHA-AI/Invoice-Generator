@@ -3,6 +3,7 @@ import { Plus, Edit2, Trash2, X } from 'lucide-react';
 
 function Clients() {
   const [clients, setClients] = useState([]);
+  const [searchQuery, setSearchQuery] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
   const [formData, setFormData] = useState({
@@ -137,6 +138,21 @@ function Clients() {
     });
   };
 
+  const filteredClients = [...clients]
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), undefined, { sensitivity: 'base' }))
+    .filter((client) => {
+      const q = searchQuery.trim().toLowerCase();
+      if (!q) return true;
+      return (
+        String(client.name || '').toLowerCase().includes(q) ||
+        String(client.gstin || '').toLowerCase().includes(q) ||
+        String(client.city || '').toLowerCase().includes(q) ||
+        String(client.state || '').toLowerCase().includes(q) ||
+        String(client.primaryContactName || '').toLowerCase().includes(q) ||
+        String(client.primaryContactEmail || '').toLowerCase().includes(q)
+      );
+    });
+
   return (
     <div>
       <div className="page-header flex items-center justify-between">
@@ -151,6 +167,15 @@ function Clients() {
       </div>
 
       <div className="card">
+        <div className="form-group" style={{ marginBottom: '1rem' }}>
+          <input
+            type="text"
+            className="form-input"
+            placeholder="Search clients by name, GSTIN, city, state, or contact..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
         <div className="table-container">
           <table className="table">
             <thead>
@@ -165,14 +190,16 @@ function Clients() {
               </tr>
             </thead>
             <tbody>
-              {clients.length === 0 ? (
+              {filteredClients.length === 0 ? (
                 <tr>
-                  <td colSpan="6" className="text-center" style={{ padding: '3rem', color: 'var(--text-light)' }}>
-                    No clients found. Add your first client to get started.
+                  <td colSpan="7" className="text-center" style={{ padding: '3rem', color: 'var(--text-light)' }}>
+                    {clients.length === 0
+                      ? 'No clients found. Add your first client to get started.'
+                      : 'No clients match your search.'}
                   </td>
                 </tr>
               ) : (
-                clients.map(client => (
+                filteredClients.map(client => (
                   <tr key={client.id}>
                     <td style={{ fontWeight: 500 }}>{client.name}</td>
                     <td style={{ fontFamily: 'monospace', fontSize: '0.875rem' }}>{client.gstin}</td>
