@@ -117,6 +117,29 @@ Edit `client/src/App.css`, lines 3-15:
 }
 ```
 
+#### Email (Resend) Setup
+
+1. Create a free account at [resend.com](https://resend.com)
+2. Go to **API Keys** → create a key → copy it (`re_...`)
+3. Copy `.env.example` to `.env` and add:
+
+```env
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=re_your_api_key_here
+MAIL_FROM=invoices@yourdomain.com
+MAIL_FROM_NAME=R Bhargava & Associates
+```
+
+4. **Verify your domain** in Resend (Domains → Add domain → add DNS records at your registrar)
+5. For AI-generated email drafts, also set `OPENAI_API_KEY` (same as HSN/SAC suggestions)
+6. Restart the server after changing `.env`
+
+**Using Send Email:** Open a saved invoice → click **Send Email**. Default templates are under **Dashboard → Email Defaults**.
+
+Email settings and send logs live in `email.db` (separate from `invoices.db`). Invoice data is only read when sending — never altered by the email feature.
+
+**Optional SMTP:** Set `EMAIL_PROVIDER=smtp` and uncomment `SMTP_*` variables in `.env.example` if you do not use Resend.
+
 ---
 
 ### 🌐 Deploy on Local Network

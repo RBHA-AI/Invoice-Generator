@@ -10,6 +10,7 @@ A professional, full-stack invoice generation platform designed specifically for
 - **Live Preview** - Real-time preview of invoice as you type
 - **GST Calculations** - Automatic CGST/SGST calculations
 - **PDF Export** - Download professional invoices as PDF
+- **Email Invoices** - Send invoices with PDF attachment, AI-assisted drafts, and configurable default templates
 - **Professional Design** - CA firm-appropriate aesthetic with gold accents
 
 ### 📋 Invoice Template Features
@@ -54,6 +55,35 @@ npm run dev
 ```
 
 The application will open at `http://localhost:3000`
+
+### Email Configuration (optional)
+
+To use **Send Email** on saved invoices, use [Resend](https://resend.com) (recommended — one API key, no Gmail App Passwords):
+
+1. Sign up at [resend.com](https://resend.com) and create an **API key**
+2. Copy `.env.example` to `.env` in the project root
+3. Add:
+
+```env
+EMAIL_PROVIDER=resend
+RESEND_API_KEY=re_your_api_key_here
+MAIL_FROM=invoices@yourdomain.com
+MAIL_FROM_NAME=R Bhargava & Associates
+```
+
+4. In the Resend dashboard, **verify your domain** (add DNS records they provide) so mail is delivered reliably
+5. Optionally set `OPENAI_API_KEY` for AI-generated email drafts
+6. Restart the server (`npm run dev` or `npm start`)
+
+**Testing before domain verification:** Resend lets you send from `onboarding@resend.dev` to your own email only — useful for a quick test.
+
+**Manual send (no Resend/SMTP):** If email is not configured on the server, open a saved invoice → **Send Email** → use **Download PDF**, **Copy email text**, and **Open mail app**, then send from Outlook/Gmail and attach the PDF yourself.
+
+**SMTP fallback:** If you prefer SMTP, set `EMAIL_PROVIDER=smtp` and the `SMTP_*` variables in `.env.example`.
+
+Configure default email subject/body templates from **Dashboard → Email Defaults**, or from the link inside the Send Email modal. The sender address is prefilled from the invoice's company and can be edited per send.
+
+Email templates and send history are stored in a separate `email.db` file (not in `invoices.db`), so your existing invoice database is never modified by the email feature.
 
 ## 📦 Production Deployment
 
@@ -260,11 +290,11 @@ For support or customization requests, contact your development team.
 
 ## 📌 Future Enhancements (Phase 2+)
 
-- [ ] Email invoices directly to clients
-- [ ] Payment tracking
-- [ ] Multiple tax templates (IGST support)
-- [ ] Invoice search and filtering
-- [ ] Excel export
+- [x] Email invoices directly to clients
+- [x] Payment tracking
+- [x] Multiple tax templates (IGST support)
+- [x] Invoice search and filtering
+- [x] Excel export
 - [ ] Client portal
 - [ ] Multi-user support with authentication
 - [ ] Automated backups

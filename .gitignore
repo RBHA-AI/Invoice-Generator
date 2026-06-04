@@ -34,3 +34,7 @@ coverage/
 
 # Misc
 .cache/
+
+# Backups
+invoices.db.backup.*
+*.xlsx

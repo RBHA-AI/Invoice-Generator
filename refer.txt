@@ -1,0 +1,3 @@
+cp invoices.db invoices.db.backup.$(date +%F-%H%M%S)
+
+

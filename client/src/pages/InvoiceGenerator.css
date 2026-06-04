@@ -326,6 +326,22 @@
   border-bottom: 1px solid #000;
 }
 
+/* Line item title + detail: same weight and black as rest of invoice (prints clearly) */
+.invoice-item-title,
+.invoice-item-detail {
+  font-size: 10px;
+  font-weight: bold;
+  color: #000;
+  font-style: normal;
+  line-height: 1.4;
+}
+
+.invoice-item-detail {
+  margin-top: 4px;
+  white-space: pre-line;
+  word-break: break-word;
+}
+
 /* ==================== BOTTOM SECTION ==================== */
 
 .bottom-section {

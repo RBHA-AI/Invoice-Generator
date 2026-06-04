@@ -1,12 +1,15 @@
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const Database = require('better-sqlite3');
 const { v4: uuidv4 } = require('uuid');
-const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const ExcelJS = require('exceljs');
+const { registerTaxCodeRoutes, maybeAutoImportTaxCodes } = require('./taxCodes');
+const { registerEmailRoutes, createEmailDb } = require('./email');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -82,6 +85,7 @@ const migrateInvoiceUniquenessPerCompany = () => {
           total REAL,
           status TEXT DEFAULT 'draft',
           signatureTitle TEXT DEFAULT 'PARTNER',
+          amountInWordsCurrency TEXT DEFAULT 'inr',
           createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY (clientId) REFERENCES clients(id),
           FOREIGN KEY (companyId) REFERENCES companies(id)
@@ -91,11 +95,11 @@ const migrateInvoiceUniquenessPerCompany = () => {
       db.exec(`
         INSERT INTO invoices_new (
           id, invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName,
-          bankBranch, bankAccount, ifsc, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle, createdAt
+          bankBranch, bankAccount, ifsc, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle, amountInWordsCurrency, createdAt
         )
         SELECT
           id, invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName,
-          bankBranch, bankAccount, ifsc, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle, createdAt
+          bankBranch, bankAccount, ifsc, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle, COALESCE(amountInWordsCurrency, 'inr'), createdAt
         FROM invoices;
       `);
 
@@ -175,6 +179,10 @@ try {
 try {
   db.prepare("ALTER TABLE invoices ADD COLUMN signatureTitle TEXT DEFAULT 'PARTNER'").run();
 } catch (e) {}
+// Additive only: no DEFAULT so existing invoice rows stay NULL (treated as INR in app code).
+try {
+  db.prepare('ALTER TABLE invoices ADD COLUMN amountInWordsCurrency TEXT').run();
+} catch (e) {}
 
 // Create tables
 db.exec(`
@@ -230,6 +238,8 @@ db.exec(`
     taxType TEXT,
     total REAL,
     status TEXT DEFAULT 'draft',
+    signatureTitle TEXT DEFAULT 'PARTNER',
+    amountInWordsCurrency TEXT DEFAULT 'inr',
     createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (clientId) REFERENCES clients(id),
     FOREIGN KEY (companyId) REFERENCES companies(id)
@@ -248,9 +258,112 @@ db.exec(`
     amount REAL,
     FOREIGN KEY (invoiceId) REFERENCES invoices(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS invoice_payments (
+    id TEXT PRIMARY KEY,
+    invoiceId TEXT NOT NULL,
+    paymentNumber INTEGER NOT NULL,
+    amountReceived REAL NOT NULL,
+    bankCharges REAL DEFAULT 0,
+    paymentDate TEXT NOT NULL,
+    paymentMode TEXT,
+    reference TEXT,
+    notes TEXT,
+    createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (invoiceId) REFERENCES invoices(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS tax_codes (
+    codeType TEXT NOT NULL,
+    code TEXT NOT NULL,
+    description TEXT NOT NULL,
+    level INTEGER,
+    parentCode TEXT,
+    updatedAt TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (codeType, code)
+  );
 `);
 
+try {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_tax_codes_type_code ON tax_codes (codeType, code);
+    CREATE INDEX IF NOT EXISTS idx_tax_codes_type_desc ON tax_codes (codeType, description);
+  `);
+} catch (e) {
+  console.warn('Tax code index setup:', e.message);
+}
+
+try {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_invoice_payments_invoice ON invoice_payments (invoiceId);
+  `);
+} catch (e) {
+  console.warn('invoice_payments index setup:', e.message);
+}
+
+const PAYMENT_MODES = ['Cash', 'Cheque', 'Bank Transfer', 'UPI', 'Credit Card', 'Other'];
+const normalizeAmountInWordsCurrency = (currency) =>
+  String(currency || '').toLowerCase() === 'aud' ? 'aud' : 'inr';
+// On update, omit amountInWordsCurrency from the body to keep the stored value (legacy clients).
+const resolveAmountInWordsCurrency = (incoming, existing) => {
+  if (incoming !== undefined && incoming !== null) {
+    return normalizeAmountInWordsCurrency(incoming);
+  }
+  return normalizeAmountInWordsCurrency(existing);
+};
+
+const getNextPaymentNumber = () => {
+  const row = db.prepare('SELECT MAX(paymentNumber) as maxNum FROM invoice_payments').get();
+  return (row && row.maxNum ? row.maxNum : 0) + 1;
+};
+
+const getInvoiceWithDetails = (invoiceId) => {
+  const invoice = db.prepare(`
+    SELECT i.*,
+      c.name as clientName,
+      c.primaryContactEmail,
+      c.primaryContactName,
+      c.address as clientAddress,
+      c.city as clientCity,
+      c.state as clientState,
+      c.pincode as clientPincode,
+      c.gstin as clientGstin,
+      co.name as companyName,
+      co.email as companyEmail,
+      co.logo as companyLogo,
+      co.address as companyAddress,
+      co.gstin as companyGstin,
+      co.msmeNumber as companyMsmeNumber,
+      co.phone as companyPhone,
+      co.state as companyState,
+      co.signatureTitle as companySignatureTitle
+    FROM invoices i
+    LEFT JOIN clients c ON i.clientId = c.id
+    LEFT JOIN companies co ON i.companyId = co.id
+    WHERE i.id = ?
+  `).get(invoiceId);
+
+  if (!invoice) return null;
+
+  const items = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(invoiceId);
+  const payments = db.prepare(`
+    SELECT * FROM invoice_payments WHERE invoiceId = ?
+    ORDER BY paymentDate DESC, createdAt DESC
+  `).all(invoiceId);
+
+  return {
+    ...invoice,
+    amountInWordsCurrency: normalizeAmountInWordsCurrency(invoice.amountInWordsCurrency),
+    items,
+    payments
+  };
+};
+
 migrateInvoiceUniquenessPerCompany();
+const emailDb = createEmailDb(PROJECT_ROOT);
+registerTaxCodeRoutes({ app, db });
+registerEmailRoutes({ app, emailDb, getInvoiceWithDetails });
+maybeAutoImportTaxCodes({ db });
 
 // ==================== COMPANY ROUTES ====================
 
@@ -707,24 +820,104 @@ app.get('/api/invoices/generate-number', (req, res) => {
   }
 });
 
-// Get single invoice with items (avoid SELECT i.*, c.* — duplicate column names
+// Get single invoice with items and payments (avoid SELECT i.*, c.* — duplicate column names
 // overwrite invoice id with client id and omit clientName expected by the UI)
 app.get('/api/invoices/:id', (req, res) => {
   try {
-    const invoice = db.prepare(`
-      SELECT i.*, c.name as clientName 
-      FROM invoices i 
-      LEFT JOIN clients c ON i.clientId = c.id 
-      WHERE i.id = ?
-    `).get(req.params.id);
-    
+    const invoice = getInvoiceWithDetails(req.params.id);
     if (!invoice) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
-    
-    const items = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(req.params.id);
-    
-    res.json({ ...invoice, items });
+    res.json(invoice);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Next payment number for Record Payment form
+app.get('/api/payments/next-number', (req, res) => {
+  try {
+    res.json({ paymentNumber: getNextPaymentNumber() });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Record payment for an invoice (full amount only; marks invoice paid)
+app.post('/api/invoices/:id/payments', (req, res) => {
+  try {
+    const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
+    if (!invoice) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+
+    if (invoice.status === 'paid') {
+      return res.status(400).json({ error: 'This invoice is already marked as paid.' });
+    }
+
+    const existingPayment = db.prepare(
+      'SELECT id FROM invoice_payments WHERE invoiceId = ? LIMIT 1'
+    ).get(req.params.id);
+    if (existingPayment) {
+      return res.status(400).json({ error: 'A payment has already been recorded for this invoice.' });
+    }
+
+    const {
+      amountReceived,
+      bankCharges,
+      paymentDate,
+      paymentMode,
+      reference,
+      notes
+    } = req.body;
+
+    const amount = parseFloat(amountReceived);
+    const invoiceTotal = parseFloat(invoice.total) || 0;
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Amount received must be a positive number.' });
+    }
+    if (Math.abs(amount - invoiceTotal) > 0.01) {
+      return res.status(400).json({
+        error: `Amount received must equal the invoice total (${invoiceTotal.toFixed(2)}).`
+      });
+    }
+
+    if (!paymentDate || !String(paymentDate).trim()) {
+      return res.status(400).json({ error: 'Payment date is required.' });
+    }
+
+    const mode = paymentMode && PAYMENT_MODES.includes(paymentMode) ? paymentMode : 'Bank Transfer';
+    const charges = parseFloat(bankCharges);
+    const bankChargesValue = Number.isFinite(charges) && charges >= 0 ? charges : 0;
+
+    const paymentId = uuidv4();
+    const paymentNumber = getNextPaymentNumber();
+
+    const tx = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO invoice_payments (
+          id, invoiceId, paymentNumber, amountReceived, bankCharges,
+          paymentDate, paymentMode, reference, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        paymentId,
+        req.params.id,
+        paymentNumber,
+        amount,
+        bankChargesValue,
+        String(paymentDate).trim(),
+        mode,
+        reference ? String(reference).trim() : null,
+        notes ? String(notes).trim() : null
+      );
+
+      db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run('paid', req.params.id);
+    });
+
+    tx();
+
+    const updated = getInvoiceWithDetails(req.params.id);
+    res.status(201).json(updated);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -778,8 +971,13 @@ app.put('/api/invoices/:id', (req, res) => {
       taxType,
       total,
       status,
-      signatureTitle
+      signatureTitle,
+      amountInWordsCurrency
     } = req.body;
+    const normalizedAmountInWordsCurrency = resolveAmountInWordsCurrency(
+      amountInWordsCurrency,
+      existing.amountInWordsCurrency
+    );
     const normalizedInvoiceNumber = String(invoiceNumber || '').trim();
     if (!normalizedInvoiceNumber) {
       return res.status(400).json({ error: 'Invoice number is required' });
@@ -795,7 +993,7 @@ app.put('/api/invoices/:id', (req, res) => {
         UPDATE invoices
         SET invoiceNumber = ?, clientId = ?, companyId = ?, invoiceDate = ?, dueDate = ?, placeOfSupply = ?, 
             bankName = ?, bankBranch = ?, bankAccount = ?, ifsc = ?, subtotal = ?, cgst = ?, sgst = ?, igst = ?, 
-            taxType = ?, total = ?, status = ?, signatureTitle = ?
+            taxType = ?, total = ?, status = ?, signatureTitle = ?, amountInWordsCurrency = ?
         WHERE id = ?
       `);
 
@@ -818,6 +1016,7 @@ app.put('/api/invoices/:id', (req, res) => {
         total,
         status || existing.status || 'draft',
         signatureTitle || existing.signatureTitle || 'PARTNER',
+        normalizedAmountInWordsCurrency,
         req.params.id
       );
 
@@ -850,16 +1049,8 @@ app.put('/api/invoices/:id', (req, res) => {
 
     tx();
 
-    const invoice = db.prepare(`
-      SELECT i.*, c.name as clientName 
-      FROM invoices i 
-      LEFT JOIN clients c ON i.clientId = c.id 
-      WHERE i.id = ?
-    `).get(req.params.id);
-
-    const savedItems = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(req.params.id);
-
-    res.json({ ...invoice, items: savedItems });
+    const invoice = getInvoiceWithDetails(req.params.id);
+    res.json(invoice);
   } catch (error) {
     if (error && error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'Invoice number already exists for this company' });
@@ -871,7 +1062,8 @@ app.put('/api/invoices/:id', (req, res) => {
 // Create invoice
 app.post('/api/invoices', (req, res) => {
   try {
-    const { invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName, bankBranch, bankAccount, ifsc, items, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle } = req.body;
+    const { invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName, bankBranch, bankAccount, ifsc, items, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle, amountInWordsCurrency } = req.body;
+    const normalizedAmountInWordsCurrency = normalizeAmountInWordsCurrency(amountInWordsCurrency);
     const normalizedInvoiceNumber = String(invoiceNumber || '').trim();
     if (!normalizedInvoiceNumber) {
       return res.status(400).json({ error: 'Invoice number is required' });
@@ -883,11 +1075,11 @@ app.post('/api/invoices', (req, res) => {
     
     // Insert invoice
     const invoiceStmt = db.prepare(`
-      INSERT INTO invoices (id, invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName, bankBranch, bankAccount, ifsc, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO invoices (id, invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName, bankBranch, bankAccount, ifsc, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle, amountInWordsCurrency)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
-    invoiceStmt.run(invoiceId, normalizedInvoiceNumber, clientId, companyId || null, invoiceDate, dueDate, placeOfSupply, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, subtotal, cgst, sgst, igst || 0, taxType || null, total, status || 'draft', signatureTitle || 'PARTNER');
+    invoiceStmt.run(invoiceId, normalizedInvoiceNumber, clientId, companyId || null, invoiceDate, dueDate, placeOfSupply, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, subtotal, cgst, sgst, igst || 0, taxType || null, total, status || 'draft', signatureTitle || 'PARTNER', normalizedAmountInWordsCurrency);
     
     // Insert items
     const itemStmt = db.prepare(`
@@ -899,16 +1091,8 @@ app.post('/api/invoices', (req, res) => {
       itemStmt.run(uuidv4(), invoiceId, item.description, item.detailedDescription || null, item.hsnSac, item.quantity, item.rate, item.cgstPercent, item.sgstPercent, item.amount);
     });
     
-    const invoice = db.prepare(`
-      SELECT i.*, c.name as clientName 
-      FROM invoices i 
-      LEFT JOIN clients c ON i.clientId = c.id 
-      WHERE i.id = ?
-    `).get(invoiceId);
-    
-    const savedItems = db.prepare('SELECT * FROM invoice_items WHERE invoiceId = ?').all(invoiceId);
-    
-    res.status(201).json({ ...invoice, items: savedItems });
+    const invoice = getInvoiceWithDetails(invoiceId);
+    res.status(201).json(invoice);
   } catch (error) {
     if (error && error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'Invoice number already exists for this company' });
@@ -917,12 +1101,16 @@ app.post('/api/invoices', (req, res) => {
   }
 });
 
+// Tax-code routes registered above; kept separate for testability.
+
 // Serve React app for all other routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/build', 'index.html'));
 });
 
 app.listen(PORT, () => {
+  const hasOpenAi = !!String(process.env.OPENAI_API_KEY || '').trim();
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📊 Database: ${DB_PATH}`);
+  console.log(`🤖 OpenAI (HSN/SAC + email drafts): ${hasOpenAi ? 'configured' : 'not set (add OPENAI_API_KEY to .env)'}`);
 });

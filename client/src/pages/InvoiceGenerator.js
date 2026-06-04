@@ -1,65 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Trash2, Download, Eye } from 'lucide-react';
-import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
+import InvoicePreview from '../components/InvoicePreview';
+import {
+  normalizeState,
+  getPlaceOfSupplyFromState,
+  calculateItemAmount,
+  calculateSubtotal,
+  calculateTotalCGST,
+  calculateTotalSGST,
+  calculateTotalIGST,
+  calculateTotal,
+  formatCurrency,
+  normalizeAmountInWordsCurrency,
+  getCurrencySymbol,
+  formatInvoiceAmount
+} from '../utils/invoiceCalculations';
+import { downloadInvoicePdf } from '../utils/generateInvoicePdf';
 import './InvoiceGenerator.css';
-
-const GST_STATE_CODES = {
-  'jammu and kashmir': '01',
-  'himachal pradesh': '02',
-  'punjab': '03',
-  'chandigarh': '04',
-  'uttarakhand': '05',
-  'haryana': '06',
-  'delhi': '07',
-  'rajasthan': '08',
-  'uttar pradesh': '09',
-  'bihar': '10',
-  'sikkim': '11',
-  'arunachal pradesh': '12',
-  'nagaland': '13',
-  'manipur': '14',
-  'mizoram': '15',
-  'tripura': '16',
-  'meghalaya': '17',
-  'assam': '18',
-  'west bengal': '19',
-  'jharkhand': '20',
-  'orissa': '21',
-  'odisha': '21',
-  'chhattisgarh': '22',
-  'madhya pradesh': '23',
-  'gujarat': '24',
-  'dadra and nagar haveli & daman and diu': '26',
-  'dadra and nagar haveli and daman and diu': '26',
-  'maharashtra': '27',
-  'karnataka': '29',
-  'goa': '30',
-  'lakshadweep': '31',
-  'kerala': '32',
-  'tamil nadu': '33',
-  'puducherry': '34',
-  'andaman and nicobar': '35',
-  'andaman and nicobar islands': '35',
-  'telangana': '36',
-  'andhra pradesh': '37',
-  'ladakh': '38'
-};
-
-const normalizeState = (state = '') =>
-  String(state)
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim();
-
-const getPlaceOfSupplyFromState = (state = '') => {
-  const normalized = normalizeState(state);
-  if (!normalized) return '';
-  const code = GST_STATE_CODES[normalized];
-  if (!code) return state;
-  return `${state.trim()} (${code})`;
-};
 
 function SearchableDropdown({
   value,
@@ -175,12 +133,6 @@ function InvoiceGenerator() {
   const [clients, setClients] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [invoiceNumber, setInvoiceNumber] = useState('');
-  const defaultBank = {
-    bankName: 'HDFC BANK LIMITED',
-    bankBranch: 'CC-31, COMMERCIAL COMPLEX, NARAINA IND AREA',
-    bankAccount: '50200003760432',
-    ifsc: 'HDFC0000440'
-  };
   const [formData, setFormData] = useState({
     clientId: '',
     companyId: '',
@@ -209,6 +161,7 @@ function InvoiceGenerator() {
   const [selectedCompany, setSelectedCompany] = useState(null);
   const [taxMode, setTaxMode] = useState('auto'); // 'auto', 'igst', 'cgst_sgst'
   const [amountInWordsCurrency, setAmountInWordsCurrency] = useState('inr'); // 'inr' | 'aud'
+  const [taxSuggestionsByIndex, setTaxSuggestionsByIndex] = useState({});
   const invoicePreviewRef = useRef(null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -219,6 +172,7 @@ function InvoiceGenerator() {
   const initialEditingInvoiceId = editInvoiceIdFromQuery || cloneInvoiceIdFromQuery || null;
   const [mode, setMode] = useState(initialMode); // 'new' | 'edit' | 'clone'
   const [editingInvoiceId, setEditingInvoiceId] = useState(initialEditingInvoiceId);
+  const [invoiceStatus, setInvoiceStatus] = useState('draft');
   
   // Get states from selected company and client
   // IMPORTANT: companies may not have state set in older data; don't default to Delhi.
@@ -288,9 +242,13 @@ function InvoiceGenerator() {
               }))
             : prev.items
         }));
+        setAmountInWordsCurrency(normalizeAmountInWordsCurrency(data.amountInWordsCurrency));
 
         if (mode === 'edit' && data.invoiceNumber) {
           setInvoiceNumber(data.invoiceNumber);
+        }
+        if (mode === 'edit') {
+          setInvoiceStatus(data.status || 'draft');
         }
       } catch (error) {
         console.error('Error fetching invoice for edit/clone:', error);
@@ -409,10 +367,70 @@ function InvoiceGenerator() {
     });
   };
 
+  const preventScrollNumberChange = (e) => {
+    // Prevent accidental wheel-based +/- step changes on focused number inputs.
+    e.target.blur();
+    e.stopPropagation();
+  };
+
   const handleItemChange = (index, field, value) => {
     const newItems = [...formData.items];
     newItems[index][field] = value;
     setFormData({ ...formData, items: newItems });
+
+    if (field === 'hsnSac' || field === 'description' || field === 'detailedDescription') {
+      setTaxSuggestionsByIndex((prev) => {
+        if (!prev[index]) return prev;
+        const next = { ...prev };
+        delete next[index];
+        return next;
+      });
+    }
+  };
+
+  const suggestTaxCodeForItem = async (index) => {
+    const item = formData.items[index];
+    if (!item) return;
+
+    setTaxSuggestionsByIndex((prev) => ({
+      ...prev,
+      [index]: { loading: true, suggestions: [], error: null, used: null }
+    }));
+
+    try {
+      const resp = await fetch('/api/tax-codes/suggest', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          description: item.description,
+          detailedDescription: item.detailedDescription
+        })
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        throw new Error(text || `Suggest failed (${resp.status})`);
+      }
+
+      const data = await resp.json();
+      const suggestions = Array.isArray(data?.suggestions) ? data.suggestions : [];
+
+      setTaxSuggestionsByIndex((prev) => ({
+        ...prev,
+        [index]: {
+          loading: false,
+          suggestions,
+          error: data?.error || null,
+          used: data?.used || null,
+          hint: data?.hint || null
+        }
+      }));
+    } catch (e) {
+      setTaxSuggestionsByIndex((prev) => ({
+        ...prev,
+        [index]: { loading: false, suggestions: [], error: String(e.message || e), used: null }
+      }));
+    }
   };
 
   const addItem = () => {
@@ -439,88 +457,12 @@ function InvoiceGenerator() {
     setFormData({ ...formData, items: newItems });
   };
 
-  const calculateItemAmount = (item) => {
-    const qty = parseFloat(item.quantity) || 0;
-    const rate = parseFloat(item.rate) || 0;
-    return qty * rate;
-  };
-
-  const calculateItemCGST = (item) => {
-    return (calculateItemAmount(item) * item.cgstPercent) / 100;
-  };
-
-  const calculateItemSGST = (item) => {
-    return (calculateItemAmount(item) * item.sgstPercent) / 100;
-  };
-
-  const calculateItemIGST = (item) => {
-    const igst =
-      item.igstPercent !== undefined && item.igstPercent !== null && item.igstPercent !== ''
-        ? parseFloat(item.igstPercent) || 0
-        : (parseFloat(item.cgstPercent) || 0) + (parseFloat(item.sgstPercent) || 0);
-    return (calculateItemAmount(item) * igst) / 100;
-  };
-
-  const calculateSubtotal = () => {
-    return formData.items.reduce((sum, item) => sum + calculateItemAmount(item), 0);
-  };
-
-  const calculateTotalCGST = () => {
-    return formData.items.reduce((sum, item) => sum + calculateItemCGST(item), 0);
-  };
-
-  const calculateTotalSGST = () => {
-    return formData.items.reduce((sum, item) => sum + calculateItemSGST(item), 0);
-  };
-
-  const calculateTotalIGST = () => {
-    return formData.items.reduce((sum, item) => sum + calculateItemIGST(item), 0);
-  };
-
-  const calculateTotal = () => {
-    if (isInterState) {
-      return calculateSubtotal() + calculateTotalIGST();
-    }
-    return calculateSubtotal() + calculateTotalCGST() + calculateTotalSGST();
-  };
-
-  const numberToWords = (num) => {
-    const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
-    const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
-    const teens = ['Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen', 'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen'];
-
-    if (num === 0) return 'Zero';
-
-    const convertLessThanThousand = (n) => {
-      if (n === 0) return '';
-      if (n < 10) return ones[n];
-      if (n < 20) return teens[n - 10];
-      if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 !== 0 ? ' ' + ones[n % 10] : '');
-      return ones[Math.floor(n / 100)] + ' Hundred' + (n % 100 !== 0 ? ' ' + convertLessThanThousand(n % 100) : '');
-    };
-
-    const crore = Math.floor(num / 10000000);
-    const lakh = Math.floor((num % 10000000) / 100000);
-    const thousand = Math.floor((num % 100000) / 1000);
-    const remainder = num % 1000;
-
-    let result = '';
-    if (crore > 0) result += convertLessThanThousand(crore) + ' Crore ';
-    if (lakh > 0) result += convertLessThanThousand(lakh) + ' Lakh ';
-    if (thousand > 0) result += convertLessThanThousand(thousand) + ' Thousand ';
-    if (remainder > 0) result += convertLessThanThousand(remainder);
-
-    return result.trim();
-  };
-
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-IN', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    }).format(amount);
-  };
-
-  const selectedCurrencySymbol = amountInWordsCurrency === 'aud' ? '$' : '₹';
+  const calculateSubtotalLocal = () => calculateSubtotal(formData.items);
+  const calculateTotalCGSTLocal = () => calculateTotalCGST(formData.items);
+  const calculateTotalSGSTLocal = () => calculateTotalSGST(formData.items);
+  const calculateTotalIGSTLocal = () => calculateTotalIGST(formData.items);
+  const calculateTotalLocal = () => calculateTotal(formData.items, isInterState);
+  const currencySymbol = getCurrencySymbol(amountInWordsCurrency);
 
   const saveInvoice = async () => {
     if (!formData.clientId) {
@@ -599,13 +541,14 @@ function InvoiceGenerator() {
         ...item,
         amount: calculateItemAmount(item)
       })),
-      subtotal: calculateSubtotal(),
-      cgst: calculateTotalCGST(),
-      sgst: calculateTotalSGST(),
-      igst: calculateTotalIGST(),
+      subtotal: calculateSubtotalLocal(),
+      cgst: calculateTotalCGSTLocal(),
+      sgst: calculateTotalSGSTLocal(),
+      igst: calculateTotalIGSTLocal(),
       taxType: isInterState ? 'IGST' : 'CGST_SGST',
-      total: calculateTotal(),
-      status: 'draft'
+      total: calculateTotalLocal(),
+      status: mode === 'edit' ? invoiceStatus : 'draft',
+      amountInWordsCurrency
     };
 
     console.log('Preparing to save invoice', invoiceData);
@@ -659,76 +602,8 @@ function InvoiceGenerator() {
       return;
     }
 
-    const element = invoicePreviewRef.current;
-    
     try {
-      // Get full dimensions of the invoice content
-      const fullWidth = element.scrollWidth || element.offsetWidth;
-      const fullHeight = element.scrollHeight || element.offsetHeight;
-
-      // Higher scale + JPEG quality = sharper text (target ~90–200 KB typical single-page invoice)
-      const captureScale = Math.min(
-        2.25,
-        Math.max(2, typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 2)
-      );
-      const canvas = await html2canvas(element, {
-        scale: captureScale,
-        useCORS: true,
-        logging: false,
-        backgroundColor: '#ffffff',
-        width: fullWidth,
-        height: fullHeight,
-        allowTaint: true
-      });
-      
-      const pdf = new jsPDF({ orientation: 'p', unit: 'mm', format: 'a4', compress: true });
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      
-      // Add margins so outer border is fully visible on all sides
-      const margin = 8; // in mm
-      const usablePageHeight = pdfHeight - margin * 2;
-      
-      // Calculate dimensions to fit on A4 within margins
-      const imgWidth = pdfWidth - margin * 2;
-      const mmPerPx = imgWidth / canvas.width;
-      const pageSlicePx = Math.floor(usablePageHeight / mmPerPx);
-      let yOffsetPx = 0;
-      let pageIndex = 0;
-
-      while (yOffsetPx < canvas.height) {
-        const sliceHeightPx = Math.min(pageSlicePx, canvas.height - yOffsetPx);
-        const pageCanvas = document.createElement('canvas');
-        pageCanvas.width = canvas.width;
-        pageCanvas.height = sliceHeightPx;
-
-        const pageCtx = pageCanvas.getContext('2d');
-        // 1:1 slice copy — disable smoothing to keep edges crisp
-        pageCtx.imageSmoothingEnabled = false;
-        pageCtx.drawImage(
-          canvas,
-          0, yOffsetPx, canvas.width, sliceHeightPx,
-          0, 0, canvas.width, sliceHeightPx
-        );
-
-        const sliceHeightMm = sliceHeightPx * mmPerPx;
-        const pageImg = pageCanvas.toDataURL('image/jpeg', 0.88);
-
-        if (pageIndex > 0) {
-          pdf.addPage();
-        }
-
-        pdf.addImage(pageImg, 'JPEG', margin, margin, imgWidth, sliceHeightMm, undefined, 'MEDIUM');
-        pdf.setLineWidth(0.4);
-        pdf.rect(margin, margin, imgWidth, sliceHeightMm);
-
-        yOffsetPx += sliceHeightPx;
-        pageIndex += 1;
-      }
-      
-      const safeInvoiceNumber = String(invoiceNumber).replace(/[^\w-]+/g, '-');
-      const filename = `invoice-${safeInvoiceNumber}.pdf`;
-      pdf.save(filename);
+      await downloadInvoicePdf(invoicePreviewRef.current, invoiceNumber);
     } catch (error) {
       console.error('Error generating PDF:', error);
       alert('Error generating PDF. Please check the console for details.');
@@ -1055,7 +930,19 @@ function InvoiceGenerator() {
 
                 <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
                   <div className="form-group">
-                    <label className="form-label">HSN/SAC</label>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                      <label className="form-label" style={{ marginBottom: 0 }}>HSN/SAC</label>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        style={{ padding: '0.35rem 0.5rem', fontSize: '12px' }}
+                        onClick={() => suggestTaxCodeForItem(index)}
+                        disabled={!!taxSuggestionsByIndex[index]?.loading}
+                        title="Suggest HSN/SAC from description"
+                      >
+                        {taxSuggestionsByIndex[index]?.loading ? 'Suggesting…' : 'Suggest'}
+                      </button>
+                    </div>
                     <input
                       type="text"
                       className="form-input"
@@ -1063,6 +950,57 @@ function InvoiceGenerator() {
                       onChange={(e) => handleItemChange(index, 'hsnSac', e.target.value)}
                       placeholder="998222"
                     />
+                    {taxSuggestionsByIndex[index]?.error && (
+                      <div style={{ marginTop: '6px', color: 'var(--danger)', fontSize: '12px' }}>
+                        {taxSuggestionsByIndex[index].error}
+                      </div>
+                    )}
+                    {(taxSuggestionsByIndex[index]?.hint || taxSuggestionsByIndex[index]?.error) && (
+                      <div style={{ marginTop: '6px', color: taxSuggestionsByIndex[index]?.error ? 'var(--danger)' : 'var(--text-light)', fontSize: '12px' }}>
+                        {taxSuggestionsByIndex[index].error
+                          ? `AI unavailable: ${taxSuggestionsByIndex[index].error}`
+                          : taxSuggestionsByIndex[index].hint}
+                      </div>
+                    )}
+                    {taxSuggestionsByIndex[index]?.used === 'llm' && (
+                      <div style={{ marginTop: '6px', color: 'var(--success, #2e7d32)', fontSize: '12px' }}>
+                        AI-ranked suggestions
+                      </div>
+                    )}
+                    {!taxSuggestionsByIndex[index]?.loading &&
+                      Array.isArray(taxSuggestionsByIndex[index]?.suggestions) &&
+                      taxSuggestionsByIndex[index].suggestions.length > 0 && (
+                        <div style={{ marginTop: '8px', border: '1px solid var(--border)', borderRadius: '8px', overflow: 'hidden' }}>
+                          {taxSuggestionsByIndex[index].suggestions.slice(0, 5).map((sug, sugIdx) => (
+                            <button
+                              key={`${sug.codeType || ''}-${sug.code || ''}-${sugIdx}`}
+                              type="button"
+                              onClick={() => handleItemChange(index, 'hsnSac', sug.code)}
+                              style={{
+                                width: '100%',
+                                textAlign: 'left',
+                                border: 'none',
+                                background: 'transparent',
+                                padding: '8px 10px',
+                                cursor: 'pointer',
+                                borderBottom: sugIdx < Math.min(5, taxSuggestionsByIndex[index].suggestions.length) - 1 ? '1px solid var(--border)' : 'none'
+                              }}
+                            >
+                              <div style={{ fontWeight: 600, fontSize: '13px', color: 'var(--text)' }}>
+                                {(sug.codeType ? `${sug.codeType} ` : '')}{sug.code}
+                                {typeof sug.confidence === 'number' ? (
+                                  <span style={{ marginLeft: '8px', fontWeight: 500, color: 'var(--text-light)' }}>
+                                    {Math.round(sug.confidence * 100)}%
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div style={{ fontSize: '12px', color: 'var(--text-light)', marginTop: '2px' }}>
+                                {sug.description || sug.rationale || ''}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                   </div>
 
                   <div className="form-group">
@@ -1072,6 +1010,7 @@ function InvoiceGenerator() {
                       className="form-input"
                       value={item.quantity}
                       onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
+                      onWheel={preventScrollNumberChange}
                       min="0"
                       step="1"
                     />
@@ -1079,12 +1018,13 @@ function InvoiceGenerator() {
                 </div>
 
                   <div className="form-group">
-                  <label className="form-label">Rate (₹)</label>
+                  <label className="form-label">Rate ({currencySymbol})</label>
                   <input
                     type="number"
                     className="form-input"
                       value={item.rate}
                       onChange={(e) => handleItemChange(index, 'rate', e.target.value)}
+                      onWheel={preventScrollNumberChange}
                       min="0"
                       step="0.01"
                   />
@@ -1099,6 +1039,7 @@ function InvoiceGenerator() {
                         className="form-input"
                         value={(item.igstPercent != null && item.igstPercent !== '') ? item.igstPercent : ((parseFloat(item.cgstPercent)||0)+(parseFloat(item.sgstPercent)||0))}
                         onChange={(e) => handleItemChange(index, 'igstPercent', e.target.value ? parseFloat(e.target.value) : '')}
+                        onWheel={preventScrollNumberChange}
                         min="0"
                         step="0.01"
                       />
@@ -1108,6 +1049,7 @@ function InvoiceGenerator() {
                         className="form-input"
                         value={item.cgstPercent}
                         onChange={(e) => handleItemChange(index, 'cgstPercent', parseFloat(e.target.value) || 0)}
+                        onWheel={preventScrollNumberChange}
                         min="0"
                         step="0.01"
                       />
@@ -1121,6 +1063,7 @@ function InvoiceGenerator() {
                         className="form-input"
                         value={item.sgstPercent}
                         onChange={(e) => handleItemChange(index, 'sgstPercent', parseFloat(e.target.value) || 0)}
+                        onWheel={preventScrollNumberChange}
                         min="0"
                         step="0.01"
                       />
@@ -1129,7 +1072,7 @@ function InvoiceGenerator() {
                 </div>
 
                 <div className="item-total">
-                  Amount: ₹{formatCurrency(calculateItemAmount(item))}
+                  Amount: {formatInvoiceAmount(calculateItemAmount(item), amountInWordsCurrency)}
                 </div>
               </div>
             ))}
@@ -1137,28 +1080,28 @@ function InvoiceGenerator() {
             <div className="invoice-summary">
               <div className="summary-row">
                 <span>Subtotal:</span>
-                <span>₹{formatCurrency(calculateSubtotal())}</span>
+                <span>{formatInvoiceAmount(calculateSubtotalLocal(), amountInWordsCurrency)}</span>
               </div>
               {isInterState ? (
                 <div className="summary-row">
                   <span>Tax:</span>
-                  <span>₹{formatCurrency(calculateTotalIGST())}</span>
+                  <span>{formatInvoiceAmount(calculateTotalIGSTLocal(), amountInWordsCurrency)}</span>
                 </div>
               ) : (
                 <>
                   <div className="summary-row">
                     <span>CGST:</span>
-                    <span>₹{formatCurrency(calculateTotalCGST())}</span>
+                    <span>{formatInvoiceAmount(calculateTotalCGSTLocal(), amountInWordsCurrency)}</span>
                   </div>
                   <div className="summary-row">
                     <span>SGST:</span>
-                    <span>₹{formatCurrency(calculateTotalSGST())}</span>
+                    <span>{formatInvoiceAmount(calculateTotalSGSTLocal(), amountInWordsCurrency)}</span>
                   </div>
                 </>
               )}
               <div className="summary-row total">
                 <span>Total:</span>
-                <span>₹{formatCurrency(calculateTotal())}</span>
+                <span>{formatInvoiceAmount(calculateTotalLocal(), amountInWordsCurrency)}</span>
               </div>
             </div>
           </div>
@@ -1183,270 +1126,15 @@ function InvoiceGenerator() {
             </div>
             
             <div className="invoice-preview">
-              <div className="invoice-page" ref={invoicePreviewRef}>
-              {/* Header with Logo, Firm Details, and TAX INVOICE */}
-              <div className="invoice-header">
-                <div className="header-left">
-                  {selectedCompany && selectedCompany.logo ? (
-                    <img 
-                      src={selectedCompany.logo} 
-                      alt={`${selectedCompany.name} Logo`} 
-                      className="invoice-logo"
-                      onError={(e) => {
-                        e.target.src = '/logo.png';
-                      }}
-                    />
-                  ) : (
-                    <img src="/logo.png" alt="CA India Logo" className="invoice-logo" />
-                  )}
-                </div>
-                <div className="header-center">
-                  {selectedCompany ? (
-                    <>
-                      <h1 className="firm-title">{selectedCompany.name}</h1>
-                      {selectedCompany.address && (
-                        <p className="firm-address">
-                          {selectedCompany.address}
-                        </p>
-                      )}
-                      {selectedCompany.gstin && (
-                        <p className="firm-gstin">GSTIN {selectedCompany.gstin}</p>
-                      )}
-                      {selectedCompany.msmeNumber && (
-                        <p className="firm-gstin">MSME {selectedCompany.msmeNumber}</p>
-                      )}
-                      {(selectedCompany.email || selectedCompany.phone) && (
-                        <p className="firm-contact">
-                          {selectedCompany.email && <span>Email: {selectedCompany.email}</span>}
-                          {selectedCompany.email && selectedCompany.phone && <span className="firm-contact-separator"> · </span>}
-                          {selectedCompany.phone && <span>Phone: {selectedCompany.phone}</span>}
-                        </p>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      <h1 className="firm-title">R Bhargava & Associates</h1>
-                      <p className="firm-address">
-                        247-B, MIG FLATS, RAJOURI GARDEN,<br />
-                        NEW DELHI Delhi 110027, India
-                      </p>
-                      <p className="firm-gstin">GSTIN 07AAQFR3892K1ZE</p>
-                    </>
-                  )}
-                </div>
-                <div className="header-right">
-                  <h2 className="tax-invoice-label">TAX INVOICE</h2>
-                </div>
-              </div>
-
-              {/* Invoice Details Box */}
-              <div className="meta-box">
-                <div className="meta-left">
-                  <div className="meta-row">
-                    <span className="meta-label">Invoice Serial No:</span> 
-                    <span className="meta-colon">:</span>
-                    <span className="meta-value">{invoiceNumber}</span>
-                  </div>
-                  <div className="meta-row">
-                    <span className="meta-label">Invoice Date</span>
-                    <span className="meta-colon">:</span>
-                    <span className="meta-value">{new Date(formData.invoiceDate).toLocaleDateString('en-GB')}</span>
-                  </div>
-                  <div className="meta-row">
-                    <span className="meta-label">Terms</span>
-                    <span className="meta-colon">:</span>
-                    <span className="meta-value">Due on Receipt</span>
-                  </div>
-                  <div className="meta-row">
-                    <span className="meta-label">Due Date</span>
-                    <span className="meta-colon">:</span>
-                    <span className="meta-value">{new Date(formData.dueDate).toLocaleDateString('en-GB')}</span>
-                  </div>
-                </div>
-                <div className="meta-right">
-                  <div className="meta-row">
-                    <span className="meta-label">Place Of Supply</span>
-                    <span className="meta-colon">:</span>
-                    <span className="meta-value">{formData.placeOfSupply}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Client Info */}
-              {selectedClient && (
-                <div className="client-info">
-                  <div className="client-name">{selectedClient.name}</div>
-                  <div className="client-address">
-                    {selectedClient.address && <>{selectedClient.address}<br /></>}
-                    {selectedClient.city && <>{selectedClient.city}</>}
-                    {selectedClient.state && <>, {selectedClient.state}</>}
-                    {selectedClient.pincode && <>, {selectedClient.pincode}</>}
-                    {amountInWordsCurrency !== 'aud' && (
-                      <>
-                        <br />
-                        India
-                      </>
-                    )}
-                  </div>
-                  {selectedClient.gstin && (
-                    <div className="client-gstin">GSTIN {selectedClient.gstin}</div>
-                  )}
-                </div>
-              )}
-
-              {/* Items Table */}
-              <table className="invoice-table">
-                <thead>
-                  <tr>
-                    <th style={{ width: '40px' }}>S.<br/>NO</th>
-                    <th>Item & Description</th>
-                    <th style={{ width: '80px' }}>HSN<br/>/SAC</th>
-                    <th style={{ width: '50px' }}>Qty</th>
-                    <th style={{ width: '90px' }}>Rate</th>
-                    {isInterState ? (
-                      <>
-                        <th style={{ width: '60px' }}>IGST<br/>%</th>
-                        <th style={{ width: '70px' }}>Amt</th>
-                      </>
-                    ) : (
-                      <>
-                        <th style={{ width: '60px' }}>CGST<br/>%</th>
-                        <th style={{ width: '70px' }}>Amt</th>
-                        <th style={{ width: '60px' }}>SGST<br/>%</th>
-                        <th style={{ width: '70px' }}>Amt</th>
-                      </>
-                    )}
-                    <th style={{ width: '90px', textAlign: 'right' }}>Amount</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {formData.items.map((item, index) => (
-                    <tr key={index}>
-                      <td style={{ textAlign: 'center', fontWeight: 'bold' }}>{index + 1}</td>
-                      <td>
-                        <div>{item.description || '-'}</div>
-                        {item.detailedDescription && (
-                          <div style={{ fontSize: '0.85em', color: '#666', marginTop: '4px', fontStyle: 'italic' }}>
-                            {item.detailedDescription}
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ textAlign: 'center' }}>{item.hsnSac || '-'}</td>
-                      <td style={{ textAlign: 'center' }}>{(parseFloat(item.quantity) || 0).toFixed(2)}</td>
-                      <td style={{ textAlign: 'right' }}>{formatCurrency(parseFloat(item.rate) || 0)}</td>
-                      {isInterState ? (
-                        <>
-                          <td style={{ textAlign: 'right' }}>
-                            {(item.igstPercent !== undefined && item.igstPercent !== null && item.igstPercent !== '')
-                              ? (parseFloat(item.igstPercent) || 0)
-                              : ((parseFloat(item.cgstPercent) || 0) + (parseFloat(item.sgstPercent) || 0))}%
-                          </td>
-                          <td style={{ textAlign: 'right' }}>
-                            {formatCurrency(calculateItemIGST(item))}
-                          </td>
-                        </>
-                      ) : (
-                        <>
-                          <td style={{ textAlign: 'right' }}>{item.cgstPercent}%</td>
-                          <td style={{ textAlign: 'right' }}>{formatCurrency(calculateItemCGST(item))}</td>
-                          <td style={{ textAlign: 'right' }}>{item.sgstPercent}%</td>
-                          <td style={{ textAlign: 'right' }}>{formatCurrency(calculateItemSGST(item))}</td>
-                        </>
-                      )}
-                      <td style={{ textAlign: 'right', fontWeight: 'bold' }}>
-                        {formatCurrency(calculateItemAmount(item))}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
-              {/* Totals and Signature Section */}
-              <div className="bottom-section">
-                <div className="bottom-left">
-                  {/* Total in Words */}
-                  <div className="total-words">
-                    <strong>Total In Words</strong><br />
-                    <em>
-                      {amountInWordsCurrency === 'aud' ? 'Australian Dollar' : 'Indian Rupee'} {numberToWords(Math.floor(calculateTotal()))} Only
-                    </em>
-                  </div>
-
-                  {/* Notes */}
-                  <div className="notes-section">
-                    <strong>Notes</strong><br />
-                    Thanks for your business.
-                  </div>
-
-                  {/* Bank Details */}
-                  <div className="bank-details">
-                    <strong>BANK NAME :</strong> {formData.bankName || 'N/A'}<br />
-                    <strong>BRANCH :</strong> {formData.bankBranch || 'N/A'}<br />
-                    <strong>BANK ACCOUNT NO :</strong> {formData.bankAccount || 'N/A'}<br />
-                    <strong>IFSC CODE :</strong> {formData.ifsc || 'N/A'}
-                  </div>
-
-                  {/* Terms & Conditions */}
-                  <div className="terms-conditions">
-                    <strong>Terms & Conditions</strong>
-                    <ol>
-                      <li>Payment is due on the receipt of the bill</li>
-                      <li>All Disputes shall be subject to Delhi Jurisdiction</li>
-                    </ol>
-                  </div>
-                </div>
-
-                <div className="bottom-right">
-                  {/* Totals Table */}
-                  <table className="totals-table">
-                    <tbody>
-                      <tr>
-                        <td>Sub Total</td>
-                        <td className="amount-cell">{formatCurrency(calculateSubtotal())}</td>
-                      </tr>
-                      {isInterState ? (
-                        <tr>
-                          <td>Tax</td>
-                          <td className="amount-cell">{formatCurrency(calculateTotalIGST())}</td>
-                        </tr>
-                      ) : (
-                        <>
-                          <tr>
-                            <td>CGST9 (9%)</td>
-                            <td className="amount-cell">{formatCurrency(calculateTotalCGST())}</td>
-                          </tr>
-                          <tr>
-                            <td>SGST9 (9%)</td>
-                            <td className="amount-cell">{formatCurrency(calculateTotalSGST())}</td>
-                          </tr>
-                        </>
-                      )}
-                      <tr className="total-row">
-                        <td><strong>Total</strong></td>
-                        <td className="amount-cell"><strong>{selectedCurrencySymbol}{formatCurrency(calculateTotal())}</strong></td>
-                      </tr>
-                      <tr className="balance-row">
-                        <td><strong>Balance Due</strong></td>
-                        <td className="amount-cell"><strong>{selectedCurrencySymbol}{formatCurrency(calculateTotal())}</strong></td>
-                      </tr>
-                    </tbody>
-                  </table>
-
-                  {/* Signature Box */}
-                  <div className="signature-box">
-                    <div className="signature-inner">
-                      <div className="signature-top">
-                        FOR {selectedCompany ? selectedCompany.name.toUpperCase() : 'R BHARGAVA & ASSOCIATES'}
-                      </div>
-                      <div className="signature-middle">
-                        {/* Empty space for physical signature */}
-                      </div>
-                      <div className="signature-bottom">{formData.signatureTitle || 'PARTNER'}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              </div>
+              <InvoicePreview
+                ref={invoicePreviewRef}
+                invoiceNumber={invoiceNumber}
+                formData={formData}
+                selectedClient={selectedClient}
+                selectedCompany={selectedCompany}
+                isInterState={isInterState}
+                amountInWordsCurrency={amountInWordsCurrency}
+              />
             </div>
           </div>
         </div>

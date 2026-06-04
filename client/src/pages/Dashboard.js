@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { FileText, Users, IndianRupee, TrendingUp } from 'lucide-react';
+import { FileText, Users, IndianRupee, TrendingUp, Mail } from 'lucide-react';
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -156,6 +156,31 @@ function Dashboard() {
           </div>
           <Link to="/invoice-summary-export" className="btn btn-primary">
             Export Summary
+          </Link>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="flex items-center justify-between" style={{ gap: '1rem', flexWrap: 'wrap' }}>
+          <div>
+            <h3 style={{
+              fontFamily: 'Playfair Display, serif',
+              fontSize: '1.25rem',
+              margin: 0,
+              color: 'var(--primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem'
+            }}>
+              <Mail size={20} />
+              Email Defaults
+            </h3>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '0.9rem', color: 'var(--text-light)' }}>
+              Configure the default subject and body used when sending invoices by email.
+            </p>
+          </div>
+          <Link to="/email-defaults" className="btn btn-outline">
+            Edit Templates
           </Link>
         </div>
       </div>
