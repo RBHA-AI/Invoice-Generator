@@ -69,13 +69,10 @@ const InvoicePreview = forwardRef(function InvoicePreview(
             </>
           ) : (
             <>
-              <h1 className="firm-title">R Bhargava & Associates</h1>
+              <h1 className="firm-title">Select a company</h1>
               <p className="firm-address">
-                247-B, MIG FLATS, RAJOURI GARDEN,
-                <br />
-                NEW DELHI Delhi 110027, India
+                Choose a company on the invoice form to show your firm details here.
               </p>
-              <p className="firm-gstin">GSTIN 07AAQFR3892K1ZE</p>
             </>
           )}
         </div>

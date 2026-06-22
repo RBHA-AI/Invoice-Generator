@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { apiFetch } from '../utils/api';
 
 function InvoiceSummaryExport() {
   const [invoices, setInvoices] = useState([]);
@@ -10,7 +11,7 @@ function InvoiceSummaryExport() {
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch('/api/invoices');
+        const res = await apiFetch('/api/invoices');
         const json = await res.json();
         setInvoices(json || []);
       } catch (e) {
@@ -42,7 +43,7 @@ function InvoiceSummaryExport() {
   const exportInvoiceSummary = async () => {
     try {
       setExporting(true);
-      const res = await fetch(`/api/invoices/export?month=${encodeURIComponent(exportMonth)}`);
+      const res = await apiFetch(`/api/invoices/export?month=${encodeURIComponent(exportMonth)}`);
       if (!res.ok) {
         let message = 'Failed to export invoice summary.';
         try {

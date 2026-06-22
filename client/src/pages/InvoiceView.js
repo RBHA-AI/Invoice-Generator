@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { X, Mail } from 'lucide-react';
+import { apiFetch } from '../utils/api';
+import { X, Mail, Repeat } from 'lucide-react';
 import SendEmailModal from '../components/SendEmailModal';
+import MakeRecurringModal from '../components/MakeRecurringModal';
 import {
   normalizeAmountInWordsCurrency,
   formatInvoiceAmount
@@ -18,6 +20,7 @@ function InvoiceView() {
   const [payments, setPayments] = useState([]);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
+  const [showRecurringModal, setShowRecurringModal] = useState(false);
   const [emailHistory, setEmailHistory] = useState([]);
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [paymentForm, setPaymentForm] = useState({
@@ -40,7 +43,7 @@ function InvoiceView() {
   useEffect(() => {
     const fetchInvoice = async () => {
       try {
-        const res = await fetch(`/api/invoices/${id}`);
+        const res = await apiFetch(`/api/invoices/${id}`);
         if (!res.ok) throw new Error('Invoice not found');
         const data = await res.json();
         applyInvoiceData(data);
@@ -50,7 +53,7 @@ function InvoiceView() {
     };
     const fetchEmailHistory = async () => {
       try {
-        const res = await fetch(`/api/invoices/${id}/email-history`);
+        const res = await apiFetch(`/api/invoices/${id}/email-history`);
         if (res.ok) {
           setEmailHistory(await res.json());
         }
@@ -75,7 +78,7 @@ function InvoiceView() {
       return;
     }
     try {
-      const res = await fetch(`/api/invoices/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/invoices/${id}`, { method: 'DELETE' });
       if (!res.ok) {
         let message = 'Failed to delete invoice.';
         try {
@@ -94,7 +97,7 @@ function InvoiceView() {
 
   const fetchNextPaymentNumber = async () => {
     try {
-      const numRes = await fetch('/api/payments/next-number');
+      const numRes = await apiFetch('/api/payments/next-number');
       const contentType = numRes.headers.get('content-type') || '';
       if (!numRes.ok || !contentType.includes('application/json')) {
         return '';
@@ -134,7 +137,7 @@ function InvoiceView() {
     e.preventDefault();
     setPaymentSubmitting(true);
     try {
-      const res = await fetch(`/api/invoices/${id}/payments`, {
+      const res = await apiFetch(`/api/invoices/${id}/payments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -178,7 +181,7 @@ function InvoiceView() {
 
   const handleEmailSent = async () => {
     try {
-      const res = await fetch(`/api/invoices/${id}/email-history`);
+      const res = await apiFetch(`/api/invoices/${id}/email-history`);
       if (res.ok) {
         setEmailHistory(await res.json());
       }
@@ -235,6 +238,10 @@ function InvoiceView() {
           )}
           <button className="btn btn-outline" onClick={handleClone}>
             Clone
+          </button>
+          <button className="btn btn-outline" onClick={() => setShowRecurringModal(true)}>
+            <Repeat size={16} style={{ marginRight: 4, verticalAlign: 'middle' }} />
+            Make Recurring
           </button>
           <button className="btn btn-danger" onClick={handleDelete}>
             Delete
@@ -602,6 +609,13 @@ function InvoiceView() {
           invoice={invoice}
           onClose={() => setShowEmailModal(false)}
           onSent={handleEmailSent}
+        />
+      )}
+
+      {showRecurringModal && invoice && (
+        <MakeRecurringModal
+          invoice={{ ...invoice, items }}
+          onClose={() => setShowRecurringModal(false)}
         />
       )}
     </div>

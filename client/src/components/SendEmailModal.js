@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { X, Sparkles, Mail, Copy, Download } from 'lucide-react';
+import { X, Sparkles, Send, Copy, Download, Paperclip, ChevronDown, ChevronUp } from 'lucide-react';
 import InvoicePreview from './InvoicePreview';
 import { invoiceToPreviewData } from '../utils/invoiceCalculations';
 import { generateInvoicePdfBlob, downloadInvoicePdf } from '../utils/generateInvoicePdf';
 import { readApiJson } from '../utils/apiResponse';
-import '../pages/InvoiceGenerator.css';
+import { apiFetch } from '../utils/api';
+import './SendEmailModal.css';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -27,8 +28,11 @@ function SendEmailModal({ invoice, onClose, onSent }) {
     configured: false,
     provider: 'none',
     smtpConfigured: false,
-    openaiConfigured: false
+    openaiConfigured: false,
+    defaultFromEmail: ''
   });
+  const [showCc, setShowCc] = useState(false);
+  const [showMore, setShowMore] = useState(false);
   const [loadingDraft, setLoadingDraft] = useState(false);
   const [sending, setSending] = useState(false);
   const [manualBusy, setManualBusy] = useState(false);
@@ -37,28 +41,36 @@ function SendEmailModal({ invoice, onClose, onSent }) {
   const [successMsg, setSuccessMsg] = useState('');
 
   const manual = isManualMode(emailStatus);
+  const pdfFilename = `Invoice-${invoice?.invoiceNumber || 'draft'}.pdf`;
 
   useEffect(() => {
     const load = async () => {
       try {
         const [statusRes, draftRes] = await Promise.all([
-          fetch('/api/email/status'),
-          fetch(`/api/invoices/${invoice.id}/render-email-template`, { method: 'POST' })
+          apiFetch('/api/email/status'),
+          apiFetch(`/api/invoices/${invoice.id}/render-email-template`, { method: 'POST' })
         ]);
+
+        let status = { configured: false, provider: 'none', openaiConfigured: false, defaultFromEmail: '' };
         if (statusRes.ok) {
-          const status = await statusRes.json();
+          status = await statusRes.json();
           setEmailStatus({
             configured: status.configured ?? status.smtpConfigured ?? false,
             provider: status.provider || 'none',
             smtpConfigured: status.configured ?? status.smtpConfigured ?? false,
-            openaiConfigured: status.openaiConfigured ?? false
+            openaiConfigured: status.openaiConfigured ?? false,
+            defaultFromEmail: status.defaultFromEmail || ''
           });
         }
+
+        const fromEmail =
+          invoice.companyEmail || status.defaultFromEmail || '';
+
         if (draftRes.ok) {
           const draft = await draftRes.json();
           setForm((prev) => ({
             ...prev,
-            fromEmail: invoice.companyEmail || prev.fromEmail,
+            fromEmail,
             to: invoice.primaryContactEmail || prev.to,
             subject: draft.subject || prev.subject,
             body: draft.body || prev.body
@@ -66,7 +78,7 @@ function SendEmailModal({ invoice, onClose, onSent }) {
         } else {
           setForm((prev) => ({
             ...prev,
-            fromEmail: invoice.companyEmail || prev.fromEmail,
+            fromEmail,
             to: invoice.primaryContactEmail || prev.to
           }));
         }
@@ -92,7 +104,7 @@ function SendEmailModal({ invoice, onClose, onSent }) {
     setError('');
     setSuccessMsg('');
     try {
-      const res = await fetch(`/api/invoices/${invoice.id}/generate-email-draft`, {
+      const res = await apiFetch(`/api/invoices/${invoice.id}/generate-email-draft`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userPrompt: form.aiPrompt, tone: 'professional' })
@@ -145,7 +157,7 @@ function SendEmailModal({ invoice, onClose, onSent }) {
         throw new Error('Subject and body are empty. Generate or edit the email first.');
       }
       await navigator.clipboard.writeText(text);
-      setSuccessMsg('Email text copied. Paste it into Outlook, Gmail, or any mail app.');
+      setSuccessMsg('Email text copied. Paste it into Gmail or your mail app.');
     } catch (e) {
       setError(e.message || 'Could not copy to clipboard');
     }
@@ -206,7 +218,7 @@ function SendEmailModal({ invoice, onClose, onSent }) {
   };
 
   const handleSend = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     const validationError = validateFormForSend();
     if (validationError) {
       setError(validationError);
@@ -233,7 +245,7 @@ function SendEmailModal({ invoice, onClose, onSent }) {
         formData.append('pdf', blob, filename);
       }
 
-      const res = await fetch(`/api/invoices/${invoice.id}/send-email`, {
+      const res = await apiFetch(`/api/invoices/${invoice.id}/send-email`, {
         method: 'POST',
         body: formData
       });
@@ -254,205 +266,210 @@ function SendEmailModal({ invoice, onClose, onSent }) {
   if (!invoice || !previewData) return null;
 
   return (
-    <div
-      className="modal-overlay"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.45)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-        padding: '1rem'
-      }}
-      onClick={onClose}
-    >
-      <div
-        className="card"
-        style={{ width: '100%', maxWidth: 720, maxHeight: '90vh', overflowY: 'auto' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between" style={{ marginBottom: '1rem' }}>
-          <h2 style={{ margin: 0, fontFamily: 'Playfair Display, serif', color: 'var(--primary)' }}>
-            <Mail size={20} style={{ verticalAlign: 'middle', marginRight: 8 }} />
-            {manual ? 'Prepare invoice email' : 'Send Invoice by Email'}
-          </h2>
-          <button type="button" className="btn btn-outline" onClick={onClose} aria-label="Close">
-            <X size={18} />
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="email-compose-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="email-compose-toolbar">
+          <div className="email-compose-toolbar-left">
+            {!manual && (
+              <button
+                type="button"
+                className="email-compose-send-btn"
+                onClick={handleSend}
+                disabled={sending}
+              >
+                <Send size={16} />
+                {sending ? 'Sending…' : 'Send'}
+              </button>
+            )}
+            <h2 className="email-compose-title">
+              {manual ? 'Prepare invoice email' : `Invoice ${invoice.invoiceNumber}`}
+            </h2>
+          </div>
+          <button type="button" className="email-compose-close" onClick={onClose} aria-label="Close">
+            <X size={20} />
           </button>
         </div>
 
-        {manual && (
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              background: '#e8f4fc',
-              color: '#0c5460',
-              borderRadius: '8px',
-              marginBottom: '1rem',
-              fontSize: '0.9rem',
-              lineHeight: 1.5
-            }}
-          >
-            <strong>Manual send (no server email setup needed)</strong>
-            <ol style={{ margin: '0.5rem 0 0', paddingLeft: '1.25rem' }}>
-              <li>Download the invoice PDF</li>
-              <li>Copy the email text (or open your mail app)</li>
-              <li>Send from Outlook, Gmail, or your usual mailbox and attach the PDF</li>
-            </ol>
-          </div>
-        )}
+        <div className="email-compose-body">
+          {manual && (
+            <div className="email-compose-alert email-compose-alert-info">
+              <strong>Manual send</strong> — download the PDF, then copy text or open your mail app.
+              No server SMTP setup required.
+            </div>
+          )}
 
-        {!invoice.primaryContactEmail && (
-          <div
-            style={{
-              padding: '0.75rem 1rem',
-              background: '#f8d7da',
-              color: '#721c24',
-              borderRadius: '8px',
-              marginBottom: '1rem',
-              fontSize: '0.9rem'
-            }}
-          >
-            This client has no email on file.{' '}
-            <Link to="/clients" style={{ color: 'inherit', fontWeight: 600 }}>
-              Add a contact email in Clients
-            </Link>
-            .
-          </div>
-        )}
+          {!invoice.primaryContactEmail && (
+            <div className="email-compose-alert email-compose-alert-warn">
+              This client has no email on file.{' '}
+              <Link to="/clients" style={{ color: 'inherit', fontWeight: 600 }}>
+                Add a contact email in Clients
+              </Link>
+              .
+            </div>
+          )}
 
-        <form onSubmit={manual ? (e) => e.preventDefault() : handleSend}>
-          <div className="form-grid" style={{ display: 'grid', gap: '1rem' }}>
-            <div>
-              <label className="form-label">From (sender email)</label>
-              <input
-                type="email"
-                name="fromEmail"
-                className="form-input"
-                value={form.fromEmail}
-                onChange={handleChange}
-                required={!manual}
-                placeholder="you@yourfirm.com"
-              />
-            </div>
-            <div>
-              <label className="form-label">To</label>
-              <input
-                type="email"
-                name="to"
-                className="form-input"
-                value={form.to}
-                onChange={handleChange}
-                required={!manual}
-              />
-            </div>
-            <div>
-              <label className="form-label">CC (comma-separated, optional)</label>
-              <input
-                type="text"
-                name="cc"
-                className="form-input"
-                value={form.cc}
-                onChange={handleChange}
-                placeholder="cc@example.com"
-              />
-            </div>
-            <div>
-              <label className="form-label">Subject</label>
-              <input
-                type="text"
-                name="subject"
-                className="form-input"
-                value={form.subject}
-                onChange={handleChange}
-                required={!manual}
-              />
-            </div>
-            <div>
-              <label className="form-label">AI prompt (optional)</label>
-              <textarea
-                name="aiPrompt"
-                className="form-input"
-                rows={2}
-                value={form.aiPrompt}
-                onChange={handleChange}
-                placeholder="e.g. Polite payment reminder, mention due date"
-              />
-              <div
-                style={{
-                  marginTop: '0.5rem',
-                  display: 'flex',
-                  gap: '0.5rem',
-                  alignItems: 'center',
-                  flexWrap: 'wrap'
-                }}
-              >
-                <button
-                  type="button"
-                  className="btn btn-outline"
-                  onClick={handleGenerateDraft}
-                  disabled={loadingDraft}
-                >
-                  <Sparkles size={16} />
-                  {loadingDraft ? 'Generating…' : 'Generate with AI'}
-                </button>
-                {!emailStatus.openaiConfigured && (
-                  <span style={{ fontSize: '0.85rem', color: 'var(--text-light)' }}>
-                    OpenAI not loaded — uses template + your note (restart server after .env change)
-                  </span>
-                )}
-                <Link to="/email-defaults" style={{ fontSize: '0.85rem', marginLeft: 'auto' }}>
-                  Edit default template
-                </Link>
+          <form onSubmit={manual ? (e) => e.preventDefault() : handleSend}>
+            <div className="email-compose-fields">
+              <div className="email-compose-row">
+                <span className="email-compose-row-label">From</span>
+                <input
+                  type="email"
+                  name="fromEmail"
+                  className="email-compose-row-input"
+                  value={form.fromEmail}
+                  onChange={handleChange}
+                  required={!manual}
+                  placeholder="you@yourfirm.com"
+                />
               </div>
-              {draftHint && (
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-light)', margin: '0.5rem 0 0' }}>
-                  {draftHint}
-                </p>
+
+              <div className="email-compose-row">
+                <span className="email-compose-row-label">To</span>
+                <input
+                  type="email"
+                  name="to"
+                  className="email-compose-row-input"
+                  value={form.to}
+                  onChange={handleChange}
+                  required={!manual}
+                  placeholder="client@example.com"
+                />
+                {!showCc && (
+                  <div className="email-compose-row-actions">
+                    <button
+                      type="button"
+                      className="email-compose-cc-toggle"
+                      onClick={() => setShowCc(true)}
+                    >
+                      Cc
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {showCc && (
+                <div className="email-compose-row">
+                  <span className="email-compose-row-label">Cc</span>
+                  <input
+                    type="text"
+                    name="cc"
+                    className="email-compose-row-input"
+                    value={form.cc}
+                    onChange={handleChange}
+                    placeholder="cc@example.com"
+                  />
+                </div>
               )}
+
+              <div className="email-compose-row">
+                <span className="email-compose-row-label">Subject</span>
+                <input
+                  type="text"
+                  name="subject"
+                  className="email-compose-row-input"
+                  value={form.subject}
+                  onChange={handleChange}
+                  required={!manual}
+                />
+              </div>
             </div>
-            <div>
-              <label className="form-label">Email body</label>
+
+            <div className="email-compose-message">
               <textarea
                 name="body"
-                className="form-input"
-                rows={8}
+                className="email-compose-textarea"
                 value={form.body}
                 onChange={handleChange}
                 required={!manual}
+                placeholder="Write your message…"
               />
             </div>
-            {!manual && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <input
-                  type="checkbox"
-                  name="attachPdf"
-                  checked={form.attachPdf}
-                  onChange={handleChange}
-                />
-                Attach invoice PDF
-              </label>
+
+            <div className="email-compose-attachments">
+              {form.attachPdf ? (
+                <span className="email-compose-attachment-chip">
+                  <Paperclip size={14} />
+                  {pdfFilename}
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({ ...prev, attachPdf: false }))}
+                    aria-label="Remove attachment"
+                  >
+                    <X size={14} />
+                  </button>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  style={{ fontSize: '0.82rem', padding: '0.35rem 0.65rem' }}
+                  onClick={() => setForm((prev) => ({ ...prev, attachPdf: true }))}
+                >
+                  <Paperclip size={14} />
+                  Attach PDF
+                </button>
+              )}
+            </div>
+
+            <div className="email-compose-more">
+              <button
+                type="button"
+                className="email-compose-more-toggle"
+                onClick={() => setShowMore((v) => !v)}
+              >
+                <span>More options — AI draft &amp; templates</span>
+                {showMore ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </button>
+              {showMore && (
+                <div className="email-compose-more-panel">
+                  <textarea
+                    name="aiPrompt"
+                    className="form-input"
+                    rows={2}
+                    value={form.aiPrompt}
+                    onChange={handleChange}
+                    placeholder="e.g. Polite payment reminder, mention due date"
+                  />
+                  <div className="email-compose-more-actions">
+                    <button
+                      type="button"
+                      className="btn btn-outline"
+                      onClick={handleGenerateDraft}
+                      disabled={loadingDraft}
+                    >
+                      <Sparkles size={16} />
+                      {loadingDraft ? 'Generating…' : 'Generate with AI'}
+                    </button>
+                    {!emailStatus.openaiConfigured && (
+                      <span style={{ fontSize: '0.82rem', color: 'var(--text-light)' }}>
+                        OpenAI not loaded — uses template + your note
+                      </span>
+                    )}
+                    <Link to="/email-defaults" style={{ fontSize: '0.82rem', marginLeft: 'auto' }}>
+                      Edit default template
+                    </Link>
+                  </div>
+                  {draftHint && (
+                    <p style={{ fontSize: '0.82rem', color: 'var(--text-light)', margin: '0.5rem 0 0' }}>
+                      {draftHint}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {error && (
+              <p className="email-compose-status email-compose-status-error">{error}</p>
             )}
-          </div>
+            {successMsg && (
+              <p className="email-compose-status email-compose-status-success">{successMsg}</p>
+            )}
 
-          {error && (
-            <p style={{ color: '#c0392b', marginTop: '1rem', fontSize: '0.9rem' }}>{error}</p>
-          )}
-          {successMsg && (
-            <p style={{ color: '#155724', marginTop: '1rem', fontSize: '0.9rem' }}>{successMsg}</p>
-          )}
-
-          <div
-            className="flex gap-2"
-            style={{ marginTop: '1.25rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}
-          >
-            <button type="button" className="btn btn-outline" onClick={onClose} disabled={sending}>
-              Cancel
-            </button>
-            {manual ? (
-              <>
+            {manual && (
+              <div className="email-compose-footer">
+                <button type="button" className="btn btn-outline" onClick={onClose} disabled={manualBusy}>
+                  Cancel
+                </button>
                 <button
                   type="button"
                   className="btn btn-outline"
@@ -464,19 +481,15 @@ function SendEmailModal({ invoice, onClose, onSent }) {
                 </button>
                 <button type="button" className="btn btn-outline" onClick={handleCopyEmail}>
                   <Copy size={16} />
-                  Copy email text
+                  Copy text
                 </button>
                 <button type="button" className="btn btn-primary" onClick={handleOpenMailApp}>
                   Open mail app
                 </button>
-              </>
-            ) : (
-              <button type="submit" className="btn btn-primary" disabled={sending}>
-                {sending ? 'Sending…' : 'Send Email'}
-              </button>
+              </div>
             )}
-          </div>
-        </form>
+          </form>
+        </div>
 
         <div
           aria-hidden="true"

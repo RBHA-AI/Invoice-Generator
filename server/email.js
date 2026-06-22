@@ -70,14 +70,14 @@ function buildTemplateVars(invoice, extra = {}) {
   };
 }
 
-function getEmailSettings(db) {
-  let row = db.prepare('SELECT * FROM email_settings WHERE id = 1').get();
+function getEmailSettings(db, workspaceId) {
+  let row = db.prepare('SELECT * FROM email_settings WHERE workspaceId = ?').get(workspaceId);
   if (!row) {
     db.prepare(`
-      INSERT INTO email_settings (id, defaultSubjectTemplate, defaultBodyTemplate, updatedAt)
-      VALUES (1, ?, ?, CURRENT_TIMESTAMP)
-    `).run(DEFAULT_SUBJECT_TEMPLATE, DEFAULT_BODY_TEMPLATE);
-    row = db.prepare('SELECT * FROM email_settings WHERE id = 1').get();
+      INSERT INTO email_settings (workspaceId, defaultSubjectTemplate, defaultBodyTemplate, updatedAt)
+      VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(workspaceId, DEFAULT_SUBJECT_TEMPLATE, DEFAULT_BODY_TEMPLATE);
+    row = db.prepare('SELECT * FROM email_settings WHERE workspaceId = ?').get(workspaceId);
   }
   return row;
 }
@@ -99,6 +99,12 @@ function getSmtpConfig() {
   return { host, port, secure, user, pass, fromName, configured: !!(host && user && pass) };
 }
 
+function getDefaultFromEmail() {
+  const mailFrom = String(process.env.MAIL_FROM || '').trim();
+  if (mailFrom) return mailFrom;
+  return String(process.env.SMTP_USER || '').trim();
+}
+
 function getEmailProviderConfig() {
   const resend = getResendConfig();
   const smtp = getSmtpConfig();
@@ -114,7 +120,7 @@ function getEmailProviderConfig() {
   const configured =
     provider === 'resend' ? resend.configured : provider === 'smtp' ? smtp.configured : false;
 
-  return { provider, configured, resend, smtp };
+  return { provider, configured, resend, smtp, defaultFromEmail: getDefaultFromEmail() };
 }
 
 function formatFromHeader(fromName, fromEmail) {
@@ -314,8 +320,10 @@ async function generateEmailDraftWithAI({ invoice, settings, userPrompt, tone })
   }
 }
 
-function registerEmailRoutes({ app, emailDb, getInvoiceWithDetails }) {
-  app.get('/api/email/status', (req, res) => {
+function registerEmailRoutes({ app, emailDb, getInvoiceWithDetails, requireAuth }) {
+  const auth = requireAuth || ((req, res, next) => next());
+
+  app.get('/api/email/status', auth, (req, res) => {
     try {
       const email = getEmailProviderConfig();
       const { apiKey, model } = getOpenAIConfig();
@@ -324,6 +332,7 @@ function registerEmailRoutes({ app, emailDb, getInvoiceWithDetails }) {
         provider: email.provider,
         smtpConfigured: email.configured,
         openaiConfigured: apiKey.length > 0,
+        defaultFromEmail: email.defaultFromEmail || '',
         model
       });
     } catch (error) {
@@ -331,9 +340,9 @@ function registerEmailRoutes({ app, emailDb, getInvoiceWithDetails }) {
     }
   });
 
-  app.get('/api/email-settings', (req, res) => {
+  app.get('/api/email-settings', auth, (req, res) => {
     try {
-      const settings = getEmailSettings(emailDb);
+      const settings = getEmailSettings(emailDb, req.workspaceId);
       res.json({
         defaultSubjectTemplate: settings.defaultSubjectTemplate,
         defaultBodyTemplate: settings.defaultBodyTemplate,
@@ -344,7 +353,7 @@ function registerEmailRoutes({ app, emailDb, getInvoiceWithDetails }) {
     }
   });
 
-  app.put('/api/email-settings', (req, res) => {
+  app.put('/api/email-settings', auth, (req, res) => {
     try {
       const subject = String(req.body?.defaultSubjectTemplate || '').trim();
       const body = String(req.body?.defaultBodyTemplate || '').trim();
@@ -354,9 +363,9 @@ function registerEmailRoutes({ app, emailDb, getInvoiceWithDetails }) {
       emailDb.prepare(`
         UPDATE email_settings
         SET defaultSubjectTemplate = ?, defaultBodyTemplate = ?, updatedAt = CURRENT_TIMESTAMP
-        WHERE id = 1
-      `).run(subject, body);
-      const settings = getEmailSettings(emailDb);
+        WHERE workspaceId = ?
+      `).run(subject, body, req.workspaceId);
+      const settings = getEmailSettings(emailDb, req.workspaceId);
       res.json({
         defaultSubjectTemplate: settings.defaultSubjectTemplate,
         defaultBodyTemplate: settings.defaultBodyTemplate,
@@ -367,8 +376,12 @@ function registerEmailRoutes({ app, emailDb, getInvoiceWithDetails }) {
     }
   });
 
-  app.get('/api/invoices/:id/email-history', (req, res) => {
+  app.get('/api/invoices/:id/email-history', auth, (req, res) => {
     try {
+      const invoice = getInvoiceWithDetails(req.params.id, req.workspaceId);
+      if (!invoice) {
+        return res.status(404).json({ error: 'Invoice not found' });
+      }
       const rows = emailDb.prepare(`
         SELECT id, invoiceId, sentAt, toEmail, cc, fromEmail, subject, status, errorMessage
         FROM invoice_emails
@@ -382,13 +395,13 @@ function registerEmailRoutes({ app, emailDb, getInvoiceWithDetails }) {
     }
   });
 
-  app.post('/api/invoices/:id/generate-email-draft', async (req, res) => {
+  app.post('/api/invoices/:id/generate-email-draft', auth, async (req, res) => {
     try {
-      const invoice = getInvoiceWithDetails(req.params.id);
+      const invoice = getInvoiceWithDetails(req.params.id, req.workspaceId);
       if (!invoice) {
         return res.status(404).json({ error: 'Invoice not found' });
       }
-      const settings = getEmailSettings(emailDb);
+      const settings = getEmailSettings(emailDb, req.workspaceId);
       const userPrompt = String(req.body?.userPrompt || '').trim();
       const tone = String(req.body?.tone || 'professional').trim();
       const draft = await generateEmailDraftWithAI({ invoice, settings, userPrompt, tone });
@@ -398,13 +411,13 @@ function registerEmailRoutes({ app, emailDb, getInvoiceWithDetails }) {
     }
   });
 
-  app.post('/api/invoices/:id/render-email-template', (req, res) => {
+  app.post('/api/invoices/:id/render-email-template', auth, (req, res) => {
     try {
-      const invoice = getInvoiceWithDetails(req.params.id);
+      const invoice = getInvoiceWithDetails(req.params.id, req.workspaceId);
       if (!invoice) {
         return res.status(404).json({ error: 'Invoice not found' });
       }
-      const settings = getEmailSettings(emailDb);
+      const settings = getEmailSettings(emailDb, req.workspaceId);
       const draft = buildDraftFromTemplate(invoice, settings);
       res.json(draft);
     } catch (error) {
@@ -412,7 +425,7 @@ function registerEmailRoutes({ app, emailDb, getInvoiceWithDetails }) {
     }
   });
 
-  app.post('/api/invoices/:id/send-email', (req, res) => {
+  app.post('/api/invoices/:id/send-email', auth, (req, res) => {
     pdfUpload.single('pdf')(req, res, async (err) => {
       if (err) {
         return res.status(400).json({ error: err.message });
@@ -422,7 +435,7 @@ function registerEmailRoutes({ app, emailDb, getInvoiceWithDetails }) {
       const invoiceId = req.params.id;
 
       try {
-        const invoice = getInvoiceWithDetails(invoiceId);
+        const invoice = getInvoiceWithDetails(invoiceId, req.workspaceId);
         if (!invoice) {
           return res.status(404).json({ error: 'Invoice not found' });
         }
@@ -529,7 +542,6 @@ function initEmailTables(emailDbPath) {
     console.warn('invoice_emails index setup:', e.message);
   }
 
-  getEmailSettings(emailDb);
   return emailDb;
 }
 
@@ -547,6 +559,7 @@ module.exports = {
   buildTemplateVars,
   buildDraftFromTemplate,
   getEmailProviderConfig,
+  getDefaultFromEmail,
   getResendConfig,
   getSmtpConfig,
   sendViaResend,

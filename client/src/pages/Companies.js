@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, X } from 'lucide-react';
+import { apiFetch } from '../utils/api';
 
 function Companies() {
   const [companies, setCompanies] = useState([]);
@@ -28,7 +29,7 @@ function Companies() {
 
   const fetchCompanies = async () => {
     try {
-      const response = await fetch('/api/companies');
+      const response = await apiFetch('/api/companies');
       const data = await response.json();
       setCompanies(data);
     } catch (error) {
@@ -63,7 +64,7 @@ function Companies() {
         formDataToSend.append('logo', formData.logo);
       }
       
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
         body: formDataToSend
       });
@@ -82,7 +83,7 @@ function Companies() {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this company?')) {
       try {
-        await fetch(`/api/companies/${id}`, { method: 'DELETE' });
+        await apiFetch(`/api/companies/${id}`, { method: 'DELETE' });
         fetchCompanies();
       } catch (error) {
         console.error('Error deleting company:', error);

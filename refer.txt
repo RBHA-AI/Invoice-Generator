@@ -1,3 +1,97 @@
+# Invoice Generator — quick reference
+# Project path on server is often: /var/www/rbhargava-invoice
+
+# =============================================================================
+# REGULAR UPDATE DEPLOY (skip deploy.sh)
+# =============================================================================
+npm run build                                    # local or on server
+cd client && npm install && npm run build && cd ..
+pm2 restart rbhargava-invoice                    # after code + build; picks up .env
+
+# =============================================================================
+# BACKUP (before any deploy)
+# =============================================================================
+# Option A — if sqlite3 CLI installed:
+./scripts/backup.sh
+
+# Option B — quick copy (no sqlite3 needed):
+mkdir -p backups/manual-$(date +%Y%m%d)
+cp invoices.db email.db backups/manual-$(date +%Y%m%d)/
+# or single file:
 cp invoices.db invoices.db.backup.$(date +%F-%H%M%S)
 
+# =============================================================================
+# .env — what restarts pick up vs what does NOT
+# =============================================================================
+# pm2 restart reloads: JWT_SECRET, ADMIN_SECRET, PORT, RESEND_*, OPENAI_*, etc.
+# pm2 restart does NOT change workspace login passwords (stored hashed in DB).
+# DEFAULT_WORKSPACE_PASSWORD only applies when workspace row is FIRST created.
 
+# Copy .env to server (deploy.sh cp often skips dotfiles):
+# scp .env user@server:/var/www/rbhargava-invoice/.env
+
+# =============================================================================
+# WORKSPACE LOGIN (multi-tenant)
+# =============================================================================
+# Sign in at /login with:
+#   Workspace name = slug (e.g. rbhargava)
+#   Password       = set via script below, NOT from .env after first create
+
+# Default workspace slug (your data): rbhargava
+
+# Create new empty customer workspace:
+./scripts/workspace.sh --create --workspace test-co --password 'TestPass123!' --name "Test Company"
+
+# Change login password for existing workspace:
+./scripts/workspace.sh --set-password --workspace rbhargava --password 'Admin@123'
+
+# Same via Node (alternative):
+node scripts/create-workspace.js --slug acme-corp --name "Acme Corp" --password 'SecretPass123'
+
+# =============================================================================
+# WHERE DATA LIVES (all tenants, one server)
+# =============================================================================
+# invoices.db     — workspaces, companies, clients, invoices (isolated by workspaceId)
+# email.db        — per-workspace email templates
+# server/uploads/logos/<workspaceId>/  — company logos
+
+# =============================================================================
+# PM2
+# =============================================================================
+pm2 status
+pm2 logs rbhargava-invoice
+pm2 restart rbhargava-invoice
+pm2 stop rbhargava-invoice
+
+# =============================================================================
+# LOCAL DEV
+# =============================================================================
+npm run dev          # backend :5000 + client :3000
+npm start            # production mode, serves client/build
+
+# =============================================================================
+# FIRST-TIME VPS ONLY (not for regular updates)
+# =============================================================================
+# ./deploy.sh        # installs nginx, pm2, copies to /var/www/rbhargava-invoice
+# then copy .env manually and: pm2 restart rbhargava-invoice
+
+# =============================================================================
+# SSL (after DNS points to server)
+# =============================================================================
+# sudo certbot --nginx -d invoice.rbhargava.com
+
+
+
+./scripts/workspace.sh --create --workspace hansit --password 'Admin@123' --name "Hans I Tech Pvt Ltd"
+
+admin1@admin1-X870-GAMING-WIFI6:~/Downloads/rbhargava-invoice-generator$ ./scripts/workspace.sh --create --workspace hansit --password 'Admin@123' --name "Hans I Tech Pvt Ltd"
+◇ injected env (16) from .env // tip: ⌘ enable debugging { debug: true }
+Workspace created.
+  Login name (slug): hansit
+  Display name:      Hans I Tech Pvt Ltd
+  Workspace id:      5a3f2ed4-5732-4d00-8ca8-271fe7492ad7
+admin1@admin1-X870-GAMING-WIFI6:~/Downloads/rbhargava-invoice-generator$ 
+
+
+PIXELMATRIX TECHNOLOGIES PRIVATE LIMITED
+./scripts/workspace.sh --create --workspace pixel --password 'Admin@123' --name "PIXELMATRIX TECHNOLOGIES PRIVATE LIMITED"

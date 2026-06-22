@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Trash2, X } from 'lucide-react';
+import { apiFetch } from '../utils/api';
 
 function Clients() {
   const [clients, setClients] = useState([]);
@@ -25,7 +26,7 @@ function Clients() {
 
   const fetchClients = async () => {
     try {
-      const response = await fetch('/api/clients');
+      const response = await apiFetch('/api/clients');
       const data = await response.json();
       setClients(data);
     } catch (error) {
@@ -43,7 +44,7 @@ function Clients() {
       
       const method = editingClient ? 'PUT' : 'POST';
       
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData)
@@ -61,7 +62,7 @@ function Clients() {
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this client?')) {
       try {
-        const res = await fetch(`/api/clients/${id}`, { method: 'DELETE' });
+        const res = await apiFetch(`/api/clients/${id}`, { method: 'DELETE' });
         if (!res.ok) {
           let message = 'Failed to delete client.';
           try {

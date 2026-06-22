@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { apiFetch } from '../utils/api';
 import { Trash2, Download, Eye } from 'lucide-react';
 import InvoicePreview from '../components/InvoicePreview';
 import {
@@ -11,7 +12,6 @@ import {
   calculateTotalSGST,
   calculateTotalIGST,
   calculateTotal,
-  formatCurrency,
   normalizeAmountInWordsCurrency,
   getCurrencySymbol,
   formatInvoiceAmount
@@ -211,7 +211,7 @@ function InvoiceGenerator() {
     const loadInvoiceForEditing = async () => {
       if (!editingInvoiceId) return;
       try {
-        const res = await fetch(`/api/invoices/${editingInvoiceId}`);
+        const res = await apiFetch(`/api/invoices/${editingInvoiceId}`);
         if (!res.ok) {
           console.error('Error loading invoice for editing:', await res.text());
           return;
@@ -285,7 +285,7 @@ function InvoiceGenerator() {
 
   const fetchClients = async () => {
     try {
-      const response = await fetch('/api/clients');
+      const response = await apiFetch('/api/clients');
       const data = await response.json();
       setClients(data);
     } catch (error) {
@@ -295,7 +295,7 @@ function InvoiceGenerator() {
 
   const fetchCompanies = async () => {
     try {
-      const response = await fetch('/api/companies');
+      const response = await apiFetch('/api/companies');
       const data = await response.json();
       setCompanies(data);
     } catch (error) {
@@ -307,7 +307,7 @@ function InvoiceGenerator() {
     // Never auto-generate in edit mode; preserve original invoice number.
     if (mode === 'edit') return;
     try {
-      const response = await fetch('/api/invoices/generate-number');
+      const response = await apiFetch('/api/invoices/generate-number');
       if (!response.ok) throw new Error(`generate-number returned ${response.status}`);
       const data = await response.json();
       if (data && typeof data.invoiceNumber === 'string' && data.invoiceNumber) {
@@ -398,7 +398,7 @@ function InvoiceGenerator() {
     }));
 
     try {
-      const resp = await fetch('/api/tax-codes/suggest', {
+      const resp = await apiFetch('/api/tax-codes/suggest', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -485,7 +485,7 @@ function InvoiceGenerator() {
 
     // Check for duplicate invoice number and offer to auto-generate (for new/clone)
     try {
-      const allRes = await fetch('/api/invoices');
+      const allRes = await apiFetch('/api/invoices');
       if (allRes.ok) {
         const allInvoices = await allRes.json();
         const normalizedCompanyId = String(formData.companyId || '');
@@ -503,7 +503,7 @@ function InvoiceGenerator() {
           const shouldGen = window.confirm('Invoice number already exists. Click OK to auto-generate a new invoice number, Cancel to edit.');
           if (shouldGen) {
             try {
-              const genRes = await fetch('/api/invoices/generate-number');
+              const genRes = await apiFetch('/api/invoices/generate-number');
               if (genRes.ok) {
                 const genJson = await genRes.json();
                 if (genJson && genJson.invoiceNumber) {
@@ -563,7 +563,7 @@ function InvoiceGenerator() {
         : '/api/invoices';
       const method = mode === 'edit' && editingInvoiceId ? 'PUT' : 'POST';
 
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(invoiceData)

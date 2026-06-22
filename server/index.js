@@ -10,6 +10,20 @@ const fs = require('fs');
 const multer = require('multer');
 const { registerTaxCodeRoutes, maybeAutoImportTaxCodes } = require('./taxCodes');
 const { registerEmailRoutes, createEmailDb } = require('./email');
+const { initRecurringBillTables, registerRecurringBillRoutes } = require('./recurringBills');
+const {
+  requireAuth,
+  requireAdmin,
+  signToken,
+  verifyPassword
+} = require('./auth');
+const {
+  migrateWorkspaces,
+  migrateEmailDb,
+  createWorkspace,
+  findWorkspaceBySlug,
+  getWorkspaceById
+} = require('./workspaces');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -21,10 +35,13 @@ const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const UPLOADS_LOGOS_DIR = path.join(UPLOADS_DIR, 'logos');
 fs.mkdirSync(UPLOADS_LOGOS_DIR, { recursive: true });
 
-// Configure multer for logo uploads
+// Configure multer for logo uploads (per-workspace subdirectory)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, UPLOADS_LOGOS_DIR);
+    const workspaceId = req.workspaceId || 'unknown';
+    const dir = path.join(UPLOADS_LOGOS_DIR, workspaceId);
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
@@ -110,11 +127,29 @@ const migrateInvoiceUniquenessPerCompany = () => {
     tx();
   }
 
-  // Enforce uniqueness by company + invoiceNumber (companyId NULL treated as empty string bucket).
+  // Legacy index; workspace migration rebuilds per-tenant uniqueness.
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_company_invoice_unique
     ON invoices (COALESCE(companyId, ''), invoiceNumber);
   `);
+};
+
+const apiAuthMiddleware = (req, res, next) => {
+  if (!req.path.startsWith('/api')) {
+    return next();
+  }
+  const publicRoutes = [
+    { method: 'POST', path: '/api/auth/login' },
+    { method: 'GET', path: '/api/tax-codes/status' },
+    { method: 'GET', path: '/api/tax-codes/search' }
+  ];
+  if (publicRoutes.some((r) => r.method === req.method && r.path === req.path)) {
+    return next();
+  }
+  if (req.method === 'POST' && req.path === '/api/admin/workspaces') {
+    return requireAdmin(req, res, next);
+  }
+  return requireAuth(req, res, next);
 };
 
 // Ensure new columns exist for existing databases (safe ALTERs)
@@ -301,6 +336,8 @@ try {
   console.warn('invoice_payments index setup:', e.message);
 }
 
+initRecurringBillTables(db);
+
 const PAYMENT_MODES = ['Cash', 'Cheque', 'Bank Transfer', 'UPI', 'Credit Card', 'Other'];
 const normalizeAmountInWordsCurrency = (currency) =>
   String(currency || '').toLowerCase() === 'aud' ? 'aud' : 'inr';
@@ -312,12 +349,19 @@ const resolveAmountInWordsCurrency = (incoming, existing) => {
   return normalizeAmountInWordsCurrency(existing);
 };
 
-const getNextPaymentNumber = () => {
-  const row = db.prepare('SELECT MAX(paymentNumber) as maxNum FROM invoice_payments').get();
+const getNextPaymentNumber = (workspaceId) => {
+  const row = db
+    .prepare(`
+      SELECT MAX(p.paymentNumber) as maxNum
+      FROM invoice_payments p
+      INNER JOIN invoices i ON p.invoiceId = i.id
+      WHERE i.workspaceId = ?
+    `)
+    .get(workspaceId);
   return (row && row.maxNum ? row.maxNum : 0) + 1;
 };
 
-const getInvoiceWithDetails = (invoiceId) => {
+const getInvoiceWithDetails = (invoiceId, workspaceId) => {
   const invoice = db.prepare(`
     SELECT i.*,
       c.name as clientName,
@@ -340,8 +384,8 @@ const getInvoiceWithDetails = (invoiceId) => {
     FROM invoices i
     LEFT JOIN clients c ON i.clientId = c.id
     LEFT JOIN companies co ON i.companyId = co.id
-    WHERE i.id = ?
-  `).get(invoiceId);
+    WHERE i.id = ? AND i.workspaceId = ?
+  `).get(invoiceId, workspaceId);
 
   if (!invoice) return null;
 
@@ -359,18 +403,217 @@ const getInvoiceWithDetails = (invoiceId) => {
   };
 };
 
+const generateNextInvoiceNumber = (workspaceId) => {
+  const currentDate = new Date();
+  const currentMonth = currentDate.getMonth() + 1;
+
+  let currentYear;
+  let nextYear;
+  if (currentMonth >= 4) {
+    currentYear = currentDate.getFullYear();
+    nextYear = currentYear + 1;
+  } else {
+    currentYear = currentDate.getFullYear() - 1;
+    nextYear = currentDate.getFullYear();
+  }
+
+  const financialYear = `${currentYear}-${nextYear.toString().slice(-2)}`;
+
+  const lastInvoice = db.prepare(`
+    SELECT invoiceNumber FROM invoices
+    WHERE workspaceId = ? AND invoiceNumber LIKE ?
+    ORDER BY createdAt DESC
+    LIMIT 1
+  `).get(workspaceId, `DL/01/${financialYear}/%`);
+
+  let nextNumber = 1;
+  if (lastInvoice) {
+    const parts = lastInvoice.invoiceNumber.split('/');
+    const lastNumber = parseInt(parts[parts.length - 1], 10);
+    if (!Number.isNaN(lastNumber)) {
+      nextNumber = lastNumber + 1;
+    }
+  }
+
+  return `DL/01/${financialYear}/${nextNumber}`;
+};
+
+const createInvoiceFromPayload = (workspaceId, payload) => {
+  const {
+    invoiceNumber,
+    clientId,
+    companyId,
+    invoiceDate,
+    dueDate,
+    placeOfSupply,
+    bankName,
+    bankBranch,
+    bankAccount,
+    ifsc,
+    items,
+    subtotal,
+    cgst,
+    sgst,
+    igst,
+    taxType,
+    total,
+    status,
+    signatureTitle,
+    amountInWordsCurrency
+  } = payload;
+
+  const normalizedAmountInWordsCurrency = normalizeAmountInWordsCurrency(amountInWordsCurrency);
+  const normalizedInvoiceNumber = String(invoiceNumber || '').trim();
+  if (!normalizedInvoiceNumber) {
+    throw new Error('Invoice number is required');
+  }
+  if (!Array.isArray(items) || items.length < 1) {
+    throw new Error('At least one line item is required');
+  }
+
+  const invoiceId = uuidv4();
+
+  const tx = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO invoices (
+        id, workspaceId, invoiceNumber, clientId, companyId, invoiceDate, dueDate,
+        placeOfSupply, bankName, bankBranch, bankAccount, ifsc, subtotal, cgst, sgst,
+        igst, taxType, total, status, signatureTitle, amountInWordsCurrency
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      invoiceId,
+      workspaceId,
+      normalizedInvoiceNumber,
+      clientId,
+      companyId || null,
+      invoiceDate,
+      dueDate,
+      placeOfSupply,
+      bankName || null,
+      bankBranch || null,
+      bankAccount || null,
+      ifsc || null,
+      subtotal,
+      cgst,
+      sgst,
+      igst || 0,
+      taxType || null,
+      total,
+      status || 'draft',
+      signatureTitle || 'PARTNER',
+      normalizedAmountInWordsCurrency
+    );
+
+    const itemStmt = db.prepare(`
+      INSERT INTO invoice_items (
+        id, invoiceId, description, detailedDescription, hsnSac, quantity, rate,
+        cgstPercent, sgstPercent, amount
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    items.forEach((item) => {
+      itemStmt.run(
+        uuidv4(),
+        invoiceId,
+        item.description,
+        item.detailedDescription || null,
+        item.hsnSac,
+        item.quantity,
+        item.rate,
+        item.cgstPercent,
+        item.sgstPercent,
+        item.amount
+      );
+    });
+  });
+
+  tx();
+  return invoiceId;
+};
+
 migrateInvoiceUniquenessPerCompany();
+const defaultWorkspace = migrateWorkspaces(db);
 const emailDb = createEmailDb(PROJECT_ROOT);
+migrateEmailDb(emailDb, defaultWorkspace.id);
+
+app.use(apiAuthMiddleware);
+
 registerTaxCodeRoutes({ app, db });
-registerEmailRoutes({ app, emailDb, getInvoiceWithDetails });
+registerEmailRoutes({ app, emailDb, getInvoiceWithDetails, requireAuth });
+registerRecurringBillRoutes({
+  app,
+  db,
+  getInvoiceWithDetails,
+  createInvoiceFromPayload,
+  generateNextInvoiceNumber
+});
 maybeAutoImportTaxCodes({ db });
+
+// ==================== AUTH ROUTES ====================
+
+app.post('/api/auth/login', (req, res) => {
+  try {
+    const workspaceInput = String(req.body?.workspace || req.body?.slug || '').trim();
+    const password = String(req.body?.password || '');
+    if (!workspaceInput || !password) {
+      return res.status(400).json({ error: 'Workspace name and password are required' });
+    }
+    const workspace = findWorkspaceBySlug(db, workspaceInput);
+    if (!workspace || !verifyPassword(password, workspace.passwordHash)) {
+      return res.status(401).json({ error: 'Invalid workspace or password' });
+    }
+    const token = signToken({ workspaceId: workspace.id, slug: workspace.slug });
+    res.json({
+      token,
+      workspace: {
+        id: workspace.id,
+        slug: workspace.slug,
+        displayName: workspace.displayName
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/auth/me', (req, res) => {
+  try {
+    const workspace = getWorkspaceById(db, req.workspaceId);
+    if (!workspace) {
+      return res.status(404).json({ error: 'Workspace not found' });
+    }
+    res.json({ workspace });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/admin/workspaces', (req, res) => {
+  try {
+    const { slug, displayName, password } = req.body || {};
+    const workspace = createWorkspace(db, { slug, displayName, password });
+    res.status(201).json({
+      workspace,
+      message: 'Workspace created. Hand off the workspace name and password to the customer.'
+    });
+  } catch (error) {
+    if (error.message && error.message.includes('already exists')) {
+      return res.status(409).json({ error: error.message });
+    }
+    res.status(400).json({ error: error.message });
+  }
+});
 
 // ==================== COMPANY ROUTES ====================
 
 // Get all companies
 app.get('/api/companies', (req, res) => {
   try {
-    const companies = db.prepare('SELECT * FROM companies ORDER BY createdAt DESC').all();
+    const companies = db
+      .prepare('SELECT * FROM companies WHERE workspaceId = ? ORDER BY createdAt DESC')
+      .all(req.workspaceId);
     res.json(companies);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -380,7 +623,9 @@ app.get('/api/companies', (req, res) => {
 // Get single company
 app.get('/api/companies/:id', (req, res) => {
   try {
-    const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id);
+    const company = db
+      .prepare('SELECT * FROM companies WHERE id = ? AND workspaceId = ?')
+      .get(req.params.id, req.workspaceId);
     if (!company) {
       return res.status(404).json({ error: 'Company not found' });
     }
@@ -399,17 +644,21 @@ app.post('/api/companies', (req, res) => {
     
     try {
       const { name, address, state, signatureTitle, gstin, msmeNumber, bankName, bankBranch, bankAccount, ifsc, email, phone } = req.body;
-      const logo = req.file ? `/uploads/logos/${req.file.filename}` : null;
+      const logo = req.file
+        ? `/uploads/logos/${req.workspaceId}/${req.file.filename}`
+        : null;
       const id = uuidv4();
       
       const stmt = db.prepare(`
-        INSERT INTO companies (id, name, address, state, signatureTitle, gstin, msmeNumber, logo, bankName, bankBranch, bankAccount, ifsc, email, phone)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO companies (id, workspaceId, name, address, state, signatureTitle, gstin, msmeNumber, logo, bankName, bankBranch, bankAccount, ifsc, email, phone)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       
-      stmt.run(id, name, address || null, state || null, signatureTitle || null, gstin || null, msmeNumber || null, logo, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, email || null, phone || null);
+      stmt.run(id, req.workspaceId, name, address || null, state || null, signatureTitle || null, gstin || null, msmeNumber || null, logo, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, email || null, phone || null);
       
-      const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(id);
+      const company = db
+        .prepare('SELECT * FROM companies WHERE id = ? AND workspaceId = ?')
+        .get(id, req.workspaceId);
       res.status(201).json(company);
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -426,26 +675,37 @@ app.put('/api/companies/:id', (req, res, next) => {
     
     try {
       const { name, address, state, signatureTitle, gstin, msmeNumber, bankName, bankBranch, bankAccount, ifsc, email, phone } = req.body;
-      const logo = req.file ? `/uploads/logos/${req.file.filename}` : undefined;
+      const logo = req.file
+        ? `/uploads/logos/${req.workspaceId}/${req.file.filename}`
+        : undefined;
+
+      const existing = db
+        .prepare('SELECT id FROM companies WHERE id = ? AND workspaceId = ?')
+        .get(req.params.id, req.workspaceId);
+      if (!existing) {
+        return res.status(404).json({ error: 'Company not found' });
+      }
 
       let stmt;
       if (logo !== undefined) {
         stmt = db.prepare(`
           UPDATE companies 
           SET name = ?, address = ?, state = ?, signatureTitle = ?, gstin = ?, msmeNumber = ?, logo = ?, bankName = ?, bankBranch = ?, bankAccount = ?, ifsc = ?, email = ?, phone = ?
-          WHERE id = ?
+          WHERE id = ? AND workspaceId = ?
         `);
-        stmt.run(name, address || null, state || null, signatureTitle || null, gstin || null, msmeNumber || null, logo, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, email || null, phone || null, req.params.id);
+        stmt.run(name, address || null, state || null, signatureTitle || null, gstin || null, msmeNumber || null, logo, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, email || null, phone || null, req.params.id, req.workspaceId);
       } else {
         stmt = db.prepare(`
           UPDATE companies 
           SET name = ?, address = ?, state = ?, signatureTitle = ?, gstin = ?, msmeNumber = ?, bankName = ?, bankBranch = ?, bankAccount = ?, ifsc = ?, email = ?, phone = ?
-          WHERE id = ?
+          WHERE id = ? AND workspaceId = ?
         `);
-        stmt.run(name, address || null, state || null, signatureTitle || null, gstin || null, msmeNumber || null, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, email || null, phone || null, req.params.id);
+        stmt.run(name, address || null, state || null, signatureTitle || null, gstin || null, msmeNumber || null, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, email || null, phone || null, req.params.id, req.workspaceId);
       }
       
-      const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id);
+      const company = db
+        .prepare('SELECT * FROM companies WHERE id = ? AND workspaceId = ?')
+        .get(req.params.id, req.workspaceId);
       res.json(company);
     } catch (error) {
       res.status(500).json({ error: error.message });
@@ -456,7 +716,12 @@ app.put('/api/companies/:id', (req, res, next) => {
 // Delete company
 app.delete('/api/companies/:id', (req, res) => {
   try {
-    db.prepare('DELETE FROM companies WHERE id = ?').run(req.params.id);
+    const result = db
+      .prepare('DELETE FROM companies WHERE id = ? AND workspaceId = ?')
+      .run(req.params.id, req.workspaceId);
+    if (result.changes === 0) {
+      return res.status(404).json({ error: 'Company not found' });
+    }
     res.json({ message: 'Company deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -468,7 +733,9 @@ app.delete('/api/companies/:id', (req, res) => {
 // Get all clients
 app.get('/api/clients', (req, res) => {
   try {
-    const clients = db.prepare('SELECT * FROM clients ORDER BY createdAt DESC').all();
+    const clients = db
+      .prepare('SELECT * FROM clients WHERE workspaceId = ? ORDER BY createdAt DESC')
+      .all(req.workspaceId);
     res.json(clients);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -478,7 +745,9 @@ app.get('/api/clients', (req, res) => {
 // Get single client
 app.get('/api/clients/:id', (req, res) => {
   try {
-    const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+    const client = db
+      .prepare('SELECT * FROM clients WHERE id = ? AND workspaceId = ?')
+      .get(req.params.id, req.workspaceId);
     if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
@@ -495,13 +764,15 @@ app.post('/api/clients', (req, res) => {
     const id = uuidv4();
     
     const stmt = db.prepare(`
-      INSERT INTO clients (id, name, gstin, address, city, state, pincode, gstTreatment, primaryContactName, primaryContactEmail, primaryContactPhone)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO clients (id, workspaceId, name, gstin, address, city, state, pincode, gstTreatment, primaryContactName, primaryContactEmail, primaryContactPhone)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     
-    stmt.run(id, name, gstin, address, city, state, pincode, gstTreatment || null, primaryContactName || null, primaryContactEmail || null, primaryContactPhone || null);
+    stmt.run(id, req.workspaceId, name, gstin, address, city, state, pincode, gstTreatment || null, primaryContactName || null, primaryContactEmail || null, primaryContactPhone || null);
     
-    const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
+    const client = db
+      .prepare('SELECT * FROM clients WHERE id = ? AND workspaceId = ?')
+      .get(id, req.workspaceId);
     res.status(201).json(client);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -516,12 +787,17 @@ app.put('/api/clients/:id', (req, res) => {
     const stmt = db.prepare(`
       UPDATE clients 
       SET name = ?, gstin = ?, address = ?, city = ?, state = ?, pincode = ?, gstTreatment = ?, primaryContactName = ?, primaryContactEmail = ?, primaryContactPhone = ?
-      WHERE id = ?
+      WHERE id = ? AND workspaceId = ?
     `);
 
-    stmt.run(name, gstin, address, city, state, pincode, gstTreatment || null, primaryContactName || null, primaryContactEmail || null, primaryContactPhone || null, req.params.id);
+    stmt.run(name, gstin, address, city, state, pincode, gstTreatment || null, primaryContactName || null, primaryContactEmail || null, primaryContactPhone || null, req.params.id, req.workspaceId);
     
-    const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+    const client = db
+      .prepare('SELECT * FROM clients WHERE id = ? AND workspaceId = ?')
+      .get(req.params.id, req.workspaceId);
+    if (!client) {
+      return res.status(404).json({ error: 'Client not found' });
+    }
     res.json(client);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -531,14 +807,16 @@ app.put('/api/clients/:id', (req, res) => {
 // Delete client (prevent delete if invoices exist)
 app.delete('/api/clients/:id', (req, res) => {
   try {
-    const client = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.id);
+    const client = db
+      .prepare('SELECT * FROM clients WHERE id = ? AND workspaceId = ?')
+      .get(req.params.id, req.workspaceId);
     if (!client) {
       return res.status(404).json({ error: 'Client not found' });
     }
 
     const invoiceCount = db
-      .prepare('SELECT COUNT(*) as count FROM invoices WHERE clientId = ?')
-      .get(req.params.id).count;
+      .prepare('SELECT COUNT(*) as count FROM invoices WHERE clientId = ? AND workspaceId = ?')
+      .get(req.params.id, req.workspaceId).count;
 
     if (invoiceCount > 0) {
       return res.status(409).json({
@@ -546,7 +824,7 @@ app.delete('/api/clients/:id', (req, res) => {
       });
     }
 
-    db.prepare('DELETE FROM clients WHERE id = ?').run(req.params.id);
+    db.prepare('DELETE FROM clients WHERE id = ? AND workspaceId = ?').run(req.params.id, req.workspaceId);
 
     res.json({ message: 'Client deleted successfully' });
   } catch (error) {
@@ -623,9 +901,9 @@ app.get('/api/invoices/export', async (req, res) => {
       FROM invoices i
       LEFT JOIN clients c ON i.clientId = c.id
       LEFT JOIN companies co ON i.companyId = co.id
-      WHERE i.invoiceDate >= ? AND i.invoiceDate <= ?
+      WHERE i.workspaceId = ? AND i.invoiceDate >= ? AND i.invoiceDate <= ?
       ORDER BY i.invoiceDate DESC, i.createdAt DESC
-    `).all(start, end);
+    `).all(req.workspaceId, start, end);
 
     const itemsByInvoiceId = new Map();
     if (rows.length > 0) {
@@ -770,8 +1048,9 @@ app.get('/api/invoices', (req, res) => {
       SELECT i.*, c.name as clientName 
       FROM invoices i 
       LEFT JOIN clients c ON i.clientId = c.id 
+      WHERE i.workspaceId = ?
       ORDER BY i.invoiceDate DESC, i.createdAt DESC
-    `).all();
+    `).all(req.workspaceId);
     res.json(invoices);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -781,39 +1060,7 @@ app.get('/api/invoices', (req, res) => {
 // Generate next invoice number
 app.get('/api/invoices/generate-number', (req, res) => {
   try {
-    const currentDate = new Date();
-    const currentMonth = currentDate.getMonth() + 1; // 0-11, so add 1
-    
-    // Financial year starts in April (month 4)
-    let currentYear, nextYear;
-    if (currentMonth >= 4) {
-      currentYear = currentDate.getFullYear();
-      nextYear = currentYear + 1;
-    } else {
-      currentYear = currentDate.getFullYear() - 1;
-      nextYear = currentDate.getFullYear();
-    }
-    
-    const financialYear = `${currentYear}-${nextYear.toString().slice(-2)}`;
-    
-    const lastInvoice = db.prepare(`
-      SELECT invoiceNumber FROM invoices 
-      WHERE invoiceNumber LIKE ? 
-      ORDER BY createdAt DESC 
-      LIMIT 1
-    `).get(`DL/01/${financialYear}/%`);
-    
-    let nextNumber = 1;
-    if (lastInvoice) {
-      const parts = lastInvoice.invoiceNumber.split('/');
-      const lastNumber = parseInt(parts[parts.length - 1]);
-      if (!isNaN(lastNumber)) {
-        nextNumber = lastNumber + 1;
-      }
-    }
-    
-    const invoiceNumber = `DL/01/${financialYear}/${nextNumber}`;
-    res.json({ invoiceNumber });
+    res.json({ invoiceNumber: generateNextInvoiceNumber(req.workspaceId) });
   } catch (error) {
     console.error('Error generating invoice number:', error);
     res.status(500).json({ error: error.message });
@@ -824,7 +1071,7 @@ app.get('/api/invoices/generate-number', (req, res) => {
 // overwrite invoice id with client id and omit clientName expected by the UI)
 app.get('/api/invoices/:id', (req, res) => {
   try {
-    const invoice = getInvoiceWithDetails(req.params.id);
+    const invoice = getInvoiceWithDetails(req.params.id, req.workspaceId);
     if (!invoice) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
@@ -837,7 +1084,7 @@ app.get('/api/invoices/:id', (req, res) => {
 // Next payment number for Record Payment form
 app.get('/api/payments/next-number', (req, res) => {
   try {
-    res.json({ paymentNumber: getNextPaymentNumber() });
+    res.json({ paymentNumber: getNextPaymentNumber(req.workspaceId) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -846,7 +1093,9 @@ app.get('/api/payments/next-number', (req, res) => {
 // Record payment for an invoice (full amount only; marks invoice paid)
 app.post('/api/invoices/:id/payments', (req, res) => {
   try {
-    const invoice = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
+    const invoice = db
+      .prepare('SELECT * FROM invoices WHERE id = ? AND workspaceId = ?')
+      .get(req.params.id, req.workspaceId);
     if (!invoice) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
@@ -891,7 +1140,7 @@ app.post('/api/invoices/:id/payments', (req, res) => {
     const bankChargesValue = Number.isFinite(charges) && charges >= 0 ? charges : 0;
 
     const paymentId = uuidv4();
-    const paymentNumber = getNextPaymentNumber();
+    const paymentNumber = getNextPaymentNumber(req.workspaceId);
 
     const tx = db.transaction(() => {
       db.prepare(`
@@ -911,12 +1160,16 @@ app.post('/api/invoices/:id/payments', (req, res) => {
         notes ? String(notes).trim() : null
       );
 
-      db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run('paid', req.params.id);
+      db.prepare('UPDATE invoices SET status = ? WHERE id = ? AND workspaceId = ?').run(
+        'paid',
+        req.params.id,
+        req.workspaceId
+      );
     });
 
     tx();
 
-    const updated = getInvoiceWithDetails(req.params.id);
+    const updated = getInvoiceWithDetails(req.params.id, req.workspaceId);
     res.status(201).json(updated);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -926,14 +1179,19 @@ app.post('/api/invoices/:id/payments', (req, res) => {
 // Delete invoice (and related items)
 app.delete('/api/invoices/:id', (req, res) => {
   try {
-    const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
+    const existing = db
+      .prepare('SELECT * FROM invoices WHERE id = ? AND workspaceId = ?')
+      .get(req.params.id, req.workspaceId);
     if (!existing) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
     const tx = db.transaction(() => {
       db.prepare('DELETE FROM invoice_items WHERE invoiceId = ?').run(req.params.id);
-      db.prepare('DELETE FROM invoices WHERE id = ?').run(req.params.id);
+      db.prepare('DELETE FROM invoices WHERE id = ? AND workspaceId = ?').run(
+        req.params.id,
+        req.workspaceId
+      );
     });
 
     tx();
@@ -947,7 +1205,9 @@ app.delete('/api/invoices/:id', (req, res) => {
 // Update invoice (including items)
 app.put('/api/invoices/:id', (req, res) => {
   try {
-    const existing = db.prepare('SELECT * FROM invoices WHERE id = ?').get(req.params.id);
+    const existing = db
+      .prepare('SELECT * FROM invoices WHERE id = ? AND workspaceId = ?')
+      .get(req.params.id, req.workspaceId);
     if (!existing) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
@@ -994,7 +1254,7 @@ app.put('/api/invoices/:id', (req, res) => {
         SET invoiceNumber = ?, clientId = ?, companyId = ?, invoiceDate = ?, dueDate = ?, placeOfSupply = ?, 
             bankName = ?, bankBranch = ?, bankAccount = ?, ifsc = ?, subtotal = ?, cgst = ?, sgst = ?, igst = ?, 
             taxType = ?, total = ?, status = ?, signatureTitle = ?, amountInWordsCurrency = ?
-        WHERE id = ?
+        WHERE id = ? AND workspaceId = ?
       `);
 
       updateStmt.run(
@@ -1017,7 +1277,8 @@ app.put('/api/invoices/:id', (req, res) => {
         status || existing.status || 'draft',
         signatureTitle || existing.signatureTitle || 'PARTNER',
         normalizedAmountInWordsCurrency,
-        req.params.id
+        req.params.id,
+        req.workspaceId
       );
 
       // Only replace line items when the body includes an items array.
@@ -1049,7 +1310,7 @@ app.put('/api/invoices/:id', (req, res) => {
 
     tx();
 
-    const invoice = getInvoiceWithDetails(req.params.id);
+    const invoice = getInvoiceWithDetails(req.params.id, req.workspaceId);
     res.json(invoice);
   } catch (error) {
     if (error && error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
@@ -1062,40 +1323,15 @@ app.put('/api/invoices/:id', (req, res) => {
 // Create invoice
 app.post('/api/invoices', (req, res) => {
   try {
-    const { invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName, bankBranch, bankAccount, ifsc, items, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle, amountInWordsCurrency } = req.body;
-    const normalizedAmountInWordsCurrency = normalizeAmountInWordsCurrency(amountInWordsCurrency);
-    const normalizedInvoiceNumber = String(invoiceNumber || '').trim();
-    if (!normalizedInvoiceNumber) {
-      return res.status(400).json({ error: 'Invoice number is required' });
-    }
-    if (!Array.isArray(items) || items.length < 1) {
-      return res.status(400).json({ error: 'At least one line item is required' });
-    }
-    const invoiceId = uuidv4();
-    
-    // Insert invoice
-    const invoiceStmt = db.prepare(`
-      INSERT INTO invoices (id, invoiceNumber, clientId, companyId, invoiceDate, dueDate, placeOfSupply, bankName, bankBranch, bankAccount, ifsc, subtotal, cgst, sgst, igst, taxType, total, status, signatureTitle, amountInWordsCurrency)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    
-    invoiceStmt.run(invoiceId, normalizedInvoiceNumber, clientId, companyId || null, invoiceDate, dueDate, placeOfSupply, bankName || null, bankBranch || null, bankAccount || null, ifsc || null, subtotal, cgst, sgst, igst || 0, taxType || null, total, status || 'draft', signatureTitle || 'PARTNER', normalizedAmountInWordsCurrency);
-    
-    // Insert items
-    const itemStmt = db.prepare(`
-      INSERT INTO invoice_items (id, invoiceId, description, detailedDescription, hsnSac, quantity, rate, cgstPercent, sgstPercent, amount)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    
-    items.forEach(item => {
-      itemStmt.run(uuidv4(), invoiceId, item.description, item.detailedDescription || null, item.hsnSac, item.quantity, item.rate, item.cgstPercent, item.sgstPercent, item.amount);
-    });
-    
-    const invoice = getInvoiceWithDetails(invoiceId);
+    const invoiceId = createInvoiceFromPayload(req.workspaceId, req.body);
+    const invoice = getInvoiceWithDetails(invoiceId, req.workspaceId);
     res.status(201).json(invoice);
   } catch (error) {
     if (error && error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
       return res.status(409).json({ error: 'Invoice number already exists for this company' });
+    }
+    if (error.message === 'Invoice number is required' || error.message === 'At least one line item is required') {
+      return res.status(400).json({ error: error.message });
     }
     res.status(500).json({ error: error.message });
   }

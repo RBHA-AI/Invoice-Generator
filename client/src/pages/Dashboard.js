@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { FileText, Users, IndianRupee, TrendingUp, Mail } from 'lucide-react';
+import { apiFetch } from '../utils/api';
 
 function Dashboard() {
   const navigate = useNavigate();
@@ -24,9 +25,9 @@ function Dashboard() {
   const fetchDashboardData = async () => {
     try {
       const [clientsRes, invoicesRes, companiesRes] = await Promise.all([
-        fetch('/api/clients'),
-        fetch('/api/invoices'),
-        fetch('/api/companies')
+        apiFetch('/api/clients'),
+        apiFetch('/api/invoices'),
+        apiFetch('/api/companies')
       ]);
       
       const clientsData = await clientsRes.json();

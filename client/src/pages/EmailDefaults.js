@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { apiFetch } from '../utils/api';
 import { Link } from 'react-router-dom';
 import { Mail } from 'lucide-react';
 
@@ -24,7 +25,7 @@ function EmailDefaults() {
   useEffect(() => {
     const fetchSettings = async () => {
       try {
-        const res = await fetch('/api/email-settings');
+        const res = await apiFetch('/api/email-settings');
         if (res.ok) {
           const data = await res.json();
           setForm({
@@ -51,7 +52,7 @@ function EmailDefaults() {
     setSaving(true);
     setMessage('');
     try {
-      const res = await fetch('/api/email-settings', {
+      const res = await apiFetch('/api/email-settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(form)
@@ -170,15 +171,12 @@ function EmailDefaults() {
         <div className="flex items-center gap-2" style={{ marginBottom: '0.5rem' }}>
           <Mail size={18} />
           <h3 style={{ margin: 0, fontFamily: 'Playfair Display, serif', color: 'var(--primary)' }}>
-            Resend setup
+            SMTP setup (Zoho / Gmail / Microsoft)
           </h3>
         </div>
         <p style={{ margin: '0 0 0.75rem', fontSize: '0.9rem', color: 'var(--text-light)' }}>
-          Email sending uses{' '}
-          <a href="https://resend.com" target="_blank" rel="noopener noreferrer">
-            Resend
-          </a>
-          . Add these to your <code>.env</code> file and restart the server:
+          The invoice app sends mail through your mailbox via SMTP. Add these to your <code>.env</code> file
+          and restart the server (<code>pm2 restart rbhargava-invoice</code>):
         </p>
         <pre
           style={{
@@ -190,14 +188,23 @@ function EmailDefaults() {
             overflowX: 'auto'
           }}
         >
-{`EMAIL_PROVIDER=resend
-RESEND_API_KEY=re_your_api_key
-MAIL_FROM=invoices@yourdomain.com
-MAIL_FROM_NAME=R Bhargava & Associates`}
+{`EMAIL_PROVIDER=smtp
+MAIL_FROM=amritendu@rbhargaassociates.com
+MAIL_FROM_NAME=R Bhargava & Associates
+SMTP_HOST=smtp.zoho.in
+SMTP_PORT=587
+SMTP_SECURE=0
+SMTP_USER=amritendu@rbhargaassociates.com
+SMTP_PASS=your-app-password-here`}
         </pre>
         <p style={{ margin: '0.75rem 0 0', fontSize: '0.85rem', color: 'var(--text-light)' }}>
-          Verify your domain in the Resend dashboard before sending to clients. For testing, Resend provides a sandbox
-          sender address.
+          <strong>Finding SMTP in Gmail:</strong> Settings → See all settings → Accounts and Import →
+          Send mail as → edit your address to see the SMTP server. Use an app password from the
+          mail provider (Zoho, Google Workspace, or Microsoft) — not your regular login password.
+        </p>
+        <p style={{ margin: '0.5rem 0 0', fontSize: '0.85rem', color: 'var(--text-light)' }}>
+          Common hosts: Zoho India <code>smtp.zoho.in</code>, Google Workspace <code>smtp.gmail.com</code>,
+          Microsoft 365 <code>smtp.office365.com</code>.
         </p>
       </div>
     </div>

@@ -164,7 +164,7 @@ export const invoiceToPreviewData = (invoice) => {
   const selectedCompany = invoice.companyId
     ? {
         id: invoice.companyId,
-        name: invoice.companyName || 'R Bhargava & Associates',
+        name: invoice.companyName || 'Company',
         address: invoice.companyAddress,
         gstin: invoice.companyGstin,
         msmeNumber: invoice.companyMsmeNumber,

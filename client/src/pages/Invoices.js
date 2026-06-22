@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { apiFetch } from '../utils/api';
 
 function Invoices() {
   const navigate = useNavigate();
@@ -15,9 +16,9 @@ function Invoices() {
     const loadData = async () => {
       try {
         const [invRes, clientsRes, companiesRes] = await Promise.all([
-          fetch('/api/invoices'),
-          fetch('/api/clients'),
-          fetch('/api/companies')
+          apiFetch('/api/invoices'),
+          apiFetch('/api/clients'),
+          apiFetch('/api/companies')
         ]);
 
         const [invJson, clientsJson, companiesJson] = await Promise.all([

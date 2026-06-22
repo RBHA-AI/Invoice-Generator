@@ -56,6 +56,8 @@ npm run dev
 
 The application will open at `http://localhost:3000`
 
+Sign in with your **workspace name** and **password**. See [MULTI_TENANT.md](MULTI_TENANT.md) for provisioning new customer workspaces and production deploy steps.
+
 ### Email Configuration (optional)
 
 To use **Send Email** on saved invoices, use [Resend](https://resend.com) (recommended — one API key, no Gmail App Passwords):
