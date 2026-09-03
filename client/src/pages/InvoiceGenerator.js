@@ -576,7 +576,7 @@ function InvoiceGenerator() {
         if (targetId) {
           navigate(`/invoice/${targetId}`);
         } else {
-          navigate('/');
+          navigate('/dashboard');
         }
         return;
       }

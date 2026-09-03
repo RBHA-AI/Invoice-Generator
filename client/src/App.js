@@ -21,6 +21,7 @@ import Invoices from './pages/Invoices';
 import InvoiceSummaryExport from './pages/InvoiceSummaryExport';
 import EmailDefaults from './pages/EmailDefaults';
 import RecurringBills from './pages/RecurringBills';
+import InvoicingPage from './landing/InvoicingPage';
 
 function RequireAuth({ children }) {
   const { isAuthenticated, loading } = useAuth();
@@ -41,6 +42,25 @@ function RequireAuth({ children }) {
   return children;
 }
 
+function PublicLanding() {
+  const { isAuthenticated, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="main-content auth-loading">
+        <p>Loading…</p>
+      </div>
+    );
+  }
+
+  // Signed-in users who hit the marketing root go straight into the app
+  if (isAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <InvoicingPage />;
+}
+
 function Navigation() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -48,11 +68,11 @@ function Navigation() {
 
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    navigate('/');
   };
 
   const navItems = [
-    { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
+    { path: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
     { path: '/invoices', icon: FileText, label: 'Invoices' },
     { path: '/recurring-bills', icon: Repeat, label: 'Recurring Bills' },
     { path: '/companies', icon: Building2, label: 'Companies' },
@@ -108,7 +128,7 @@ function AppShell() {
       <Navigation />
       <main className="main-content">
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/invoice-summary-export" element={<InvoiceSummaryExport />} />
           <Route path="/email-defaults" element={<EmailDefaults />} />
           <Route path="/invoices" element={<Invoices />} />
@@ -117,6 +137,7 @@ function AppShell() {
           <Route path="/clients" element={<Clients />} />
           <Route path="/invoice" element={<InvoiceGenerator />} />
           <Route path="/invoice/:id" element={<InvoiceView />} />
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </main>
     </div>
@@ -128,6 +149,7 @@ function App() {
     <AuthProvider>
       <Router>
         <Routes>
+          <Route path="/" element={<PublicLanding />} />
           <Route path="/login" element={<Login />} />
           <Route
             path="/*"

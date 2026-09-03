@@ -1,16 +1,44 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { apiFetch } from '../utils/api';
 
 function Invoices() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [invoices, setInvoices] = useState([]);
   const [clients, setClients] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [invoiceSearch, setInvoiceSearch] = useState('');
-  const [invoiceClientFilter, setInvoiceClientFilter] = useState('');
-  const [invoiceCompanyFilter, setInvoiceCompanyFilter] = useState('');
+  const [invoiceClientFilter, setInvoiceClientFilter] = useState(
+    () => searchParams.get('client') || ''
+  );
+  const [invoiceCompanyFilter, setInvoiceCompanyFilter] = useState(
+    () => searchParams.get('company') || ''
+  );
+
+  useEffect(() => {
+    const client = searchParams.get('client') || '';
+    const company = searchParams.get('company') || '';
+    setInvoiceClientFilter(client);
+    setInvoiceCompanyFilter(company);
+  }, [searchParams]);
+
+  const updateClientFilter = (clientId) => {
+    setInvoiceClientFilter(clientId);
+    const next = new URLSearchParams(searchParams);
+    if (clientId) next.set('client', clientId);
+    else next.delete('client');
+    setSearchParams(next, { replace: true });
+  };
+
+  const updateCompanyFilter = (companyId) => {
+    setInvoiceCompanyFilter(companyId);
+    const next = new URLSearchParams(searchParams);
+    if (companyId) next.set('company', companyId);
+    else next.delete('company');
+    setSearchParams(next, { replace: true });
+  };
 
   useEffect(() => {
     const loadData = async () => {
@@ -107,7 +135,7 @@ function Invoices() {
             <select
               className="form-select"
               value={invoiceClientFilter}
-              onChange={(e) => setInvoiceClientFilter(e.target.value)}
+              onChange={(e) => updateClientFilter(e.target.value)}
             >
               <option value="">All clients</option>
               {clients.map((client) => (
@@ -124,7 +152,7 @@ function Invoices() {
             <select
               className="form-select"
               value={invoiceCompanyFilter}
-              onChange={(e) => setInvoiceCompanyFilter(e.target.value)}
+              onChange={(e) => updateCompanyFilter(e.target.value)}
             >
               <option value="">All companies</option>
               {companies.map((company) => (

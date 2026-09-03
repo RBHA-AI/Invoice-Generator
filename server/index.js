@@ -10,7 +10,9 @@ const fs = require('fs');
 const multer = require('multer');
 const { registerTaxCodeRoutes, maybeAutoImportTaxCodes } = require('./taxCodes');
 const { registerEmailRoutes, createEmailDb } = require('./email');
+const { createImportedInvoicesDb, registerImportedInvoiceRoutes } = require('./importedInvoices');
 const { initRecurringBillTables, registerRecurringBillRoutes } = require('./recurringBills');
+const { registerAiChatRoutes } = require('./aiChat');
 const {
   requireAuth,
   requireAdmin,
@@ -33,7 +35,9 @@ const PROJECT_ROOT = path.join(__dirname, '..');
 const DB_PATH = process.env.INVOICES_DB_PATH || path.join(PROJECT_ROOT, 'invoices.db');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const UPLOADS_LOGOS_DIR = path.join(UPLOADS_DIR, 'logos');
+const UPLOADS_IMPORTED_DIR = path.join(UPLOADS_DIR, 'imported');
 fs.mkdirSync(UPLOADS_LOGOS_DIR, { recursive: true });
+fs.mkdirSync(UPLOADS_IMPORTED_DIR, { recursive: true });
 
 // Configure multer for logo uploads (per-workspace subdirectory)
 const storage = multer.diskStorage({
@@ -536,12 +540,19 @@ const createInvoiceFromPayload = (workspaceId, payload) => {
 migrateInvoiceUniquenessPerCompany();
 const defaultWorkspace = migrateWorkspaces(db);
 const emailDb = createEmailDb(PROJECT_ROOT);
+const importedDb = createImportedInvoicesDb(PROJECT_ROOT);
 migrateEmailDb(emailDb, defaultWorkspace.id);
 
 app.use(apiAuthMiddleware);
 
 registerTaxCodeRoutes({ app, db });
 registerEmailRoutes({ app, emailDb, getInvoiceWithDetails, requireAuth });
+registerImportedInvoiceRoutes({
+  app,
+  importedDb,
+  uploadsImportedDir: UPLOADS_IMPORTED_DIR,
+  requireAuth
+});
 registerRecurringBillRoutes({
   app,
   db,
@@ -549,6 +560,7 @@ registerRecurringBillRoutes({
   createInvoiceFromPayload,
   generateNextInvoiceNumber
 });
+registerAiChatRoutes({ app, db, importedDb, emailDb, requireAuth });
 maybeAutoImportTaxCodes({ db });
 
 // ==================== AUTH ROUTES ====================

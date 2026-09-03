@@ -12,7 +12,7 @@ function Login() {
 
   React.useEffect(() => {
     if (!loading && isAuthenticated) {
-      navigate('/', { replace: true });
+      navigate('/dashboard', { replace: true });
     }
   }, [loading, isAuthenticated, navigate]);
 
@@ -22,7 +22,7 @@ function Login() {
     setSubmitting(true);
     try {
       await login(workspace.trim(), password);
-      navigate('/', { replace: true });
+      navigate('/dashboard', { replace: true });
     } catch (err) {
       setError(err.message || 'Sign in failed');
     } finally {

@@ -10,6 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DB_PATH="${PROJECT_ROOT}/invoices.db"
+IMPORTED_DB_PATH="${PROJECT_ROOT}/imported_invoices.db"
 UPLOADS_PATH="${PROJECT_ROOT}/server/uploads"
 
 BACKUP_BASE_DIR="${PROJECT_ROOT}/backups"
@@ -35,6 +36,12 @@ sqlite3 "${DB_PATH}" ".backup '${BACKUP_DIR}/invoices.db'"
 echo "Compressing database backup..."
 gzip -f "${BACKUP_DIR}/invoices.db"
 
+if [[ -f "${IMPORTED_DB_PATH}" ]]; then
+  echo "Creating imported invoices database backup..."
+  sqlite3 "${IMPORTED_DB_PATH}" ".backup '${BACKUP_DIR}/imported_invoices.db'"
+  gzip -f "${BACKUP_DIR}/imported_invoices.db"
+fi
+
 if [[ -d "${UPLOADS_PATH}" ]]; then
   echo "Archiving uploads..."
   tar -czf "${BACKUP_DIR}/uploads.tar.gz" -C "${PROJECT_ROOT}/server" "uploads"
@@ -44,6 +51,7 @@ cat > "${BACKUP_DIR}/metadata.txt" <<EOF
 created_at=$(date -Iseconds)
 project_root=${PROJECT_ROOT}
 db_file=invoices.db.gz
+imported_db_file=$( [[ -f "${BACKUP_DIR}/imported_invoices.db.gz" ]] && echo "imported_invoices.db.gz" || echo "none" )
 uploads_archive=$( [[ -f "${BACKUP_DIR}/uploads.tar.gz" ]] && echo "uploads.tar.gz" || echo "none" )
 EOF
 

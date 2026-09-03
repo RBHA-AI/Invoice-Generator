@@ -11,6 +11,7 @@ A professional, full-stack invoice generation platform designed specifically for
 - **GST Calculations** - Automatic CGST/SGST calculations
 - **PDF Export** - Download professional invoices as PDF
 - **Email Invoices** - Send invoices with PDF attachment, AI-assisted drafts, and configurable default templates
+- **Imported Invoices** - Upload invoice scans (image/PDF), AI vision extraction, review and edit — stored in a separate database from issued invoices
 - **Professional Design** - CA firm-appropriate aesthetic with gold accents
 
 ### 📋 Invoice Template Features
@@ -86,6 +87,18 @@ MAIL_FROM_NAME=R Bhargava & Associates
 Configure default email subject/body templates from **Dashboard → Email Defaults**, or from the link inside the Send Email modal. The sender address is prefilled from the invoice's company and can be edited per send.
 
 Email templates and send history are stored in a separate `email.db` file (not in `invoices.db`), so your existing invoice database is never modified by the email feature.
+
+### Imported Invoices (AI/OCR upload)
+
+Use **Imported Invoices** in the sidebar to upload a photo or PDF of a vendor bill or issued invoice copy. The server uses OpenAI vision to extract fields; you review and edit anything missing before marking complete.
+
+1. Set `OPENAI_API_KEY` in `.env` (required for extraction)
+2. Optional: `OPENAI_VISION_MODEL` (default: same as `OPENAI_MODEL`), `IMPORTED_INVOICE_LLM_TIMEOUT_MS` (default 30000)
+3. Optional: `IMPORTED_INVOICES_DB_PATH` to customize where imported data is stored (default: `imported_invoices.db` at project root)
+
+Imported invoice data and uploaded scans live in **`imported_invoices.db`** and **`server/uploads/imported/<workspaceId>/`** — completely separate from `invoices.db` and your issued invoice workflow.
+
+PDF uploads are converted to an image (first page) server-side before AI extraction, since the vision API only accepts image formats.
 
 ## 📦 Production Deployment
 
@@ -179,6 +192,8 @@ rbhargava-invoice-generator/
 │   └── package.json
 ├── package.json
 ├── invoices.db               # SQLite database (auto-created)
+├── imported_invoices.db      # Imported invoice scans + extracted data (auto-created)
+├── email.db                  # Email templates and send log (auto-created)
 └── README.md
 ```
 
@@ -192,7 +207,7 @@ The application uses SQLite for local data storage. The database file (`invoices
 - **invoice_items** - Invoice line items
 
 ### Backup
-To backup your data, simply copy the `invoices.db` file to a safe location.
+To backup your data, copy `invoices.db`, `imported_invoices.db`, `email.db`, and `server/uploads/` to a safe location (or run `./scripts/backup.sh`).
 
 ## 🎨 Customization
 

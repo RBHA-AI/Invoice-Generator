@@ -160,7 +160,7 @@ function EmailDefaults() {
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? 'Saving…' : 'Save Defaults'}
             </button>
-            <Link to="/" className="btn btn-outline">
+            <Link to="/dashboard" className="btn btn-outline">
               Back to Dashboard
             </Link>
           </div>

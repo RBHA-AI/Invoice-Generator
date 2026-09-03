@@ -77,7 +77,7 @@ function InvoiceSummaryExport() {
           <h1 className="page-title">Export Invoice Summary</h1>
           <p className="page-subtitle">Download an accountant-friendly monthly Excel export.</p>
         </div>
-        <Link to="/" className="btn btn-outline">
+        <Link to="/dashboard" className="btn btn-outline">
           Back to Dashboard
         </Link>
       </div>

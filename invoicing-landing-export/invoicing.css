@@ -1,0 +1,131 @@
+.invoicing-page {
+  --inv-navy: #111827;
+  --inv-gold: #d4af37;
+  --inv-gold-hover: #c9a227;
+  --inv-bg: #f3f4f6;
+  --inv-card: #ffffff;
+  --inv-muted: #6b7280;
+  --inv-border: #e5e7eb;
+
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  background-color: var(--inv-bg);
+  color: var(--inv-navy);
+}
+
+.invoicing-page .inv-display {
+  font-family: "Playfair Display", Georgia, serif;
+}
+
+.invoicing-page .inv-mesh {
+  background-color: var(--inv-bg);
+  background-image:
+    radial-gradient(at 0% 0%, rgba(212, 175, 55, 0.12) 0%, transparent 50%),
+    radial-gradient(at 100% 0%, rgba(17, 24, 39, 0.06) 0%, transparent 45%),
+    radial-gradient(at 50% 100%, rgba(212, 175, 55, 0.08) 0%, transparent 40%);
+}
+
+.invoicing-page .inv-card {
+  background: var(--inv-card);
+  border: 1px solid var(--inv-border);
+  box-shadow:
+    0 1px 2px rgba(17, 24, 39, 0.04),
+    0 8px 24px rgba(17, 24, 39, 0.06);
+}
+
+.invoicing-page .inv-btn-primary {
+  background: var(--inv-gold);
+  color: var(--inv-navy);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.invoicing-page .inv-btn-primary:hover {
+  background: var(--inv-gold-hover);
+  box-shadow: 0 8px 24px rgba(212, 175, 55, 0.35);
+  transform: translateY(-1px);
+}
+
+.invoicing-page .inv-btn-primary:active {
+  transform: translateY(0);
+}
+
+.invoicing-page .inv-btn-outline {
+  border: 1.5px solid var(--inv-navy);
+  color: var(--inv-navy);
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.invoicing-page .inv-btn-outline:hover {
+  background: rgba(17, 24, 39, 0.04);
+  transform: translateY(-1px);
+}
+
+.invoicing-page .inv-reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.7s ease, transform 0.7s ease;
+}
+
+.invoicing-page .inv-reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.invoicing-page .inv-float {
+  animation: inv-float 6s ease-in-out infinite;
+}
+
+@keyframes inv-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .invoicing-page .inv-float {
+    animation: none;
+  }
+
+  .invoicing-page .inv-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}
+
+.invoicing-page .inv-tab-panel {
+  animation: inv-tab-in 0.35s ease;
+}
+
+@keyframes inv-tab-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .invoicing-page .inv-tab-panel {
+    animation: none;
+  }
+}
+
+.invoicing-page .inv-caret::after {
+  content: "|";
+  animation: inv-blink 1s step-end infinite;
+  color: var(--inv-gold);
+  margin-left: 1px;
+}
+
+@keyframes inv-blink {
+  50% {
+    opacity: 0;
+  }
+}

@@ -193,7 +193,7 @@ function InvoiceView() {
   if (!invoice) return (
     <div className="card">
       <p>Loading invoice...</p>
-      <p><Link to="/">Back to dashboard</Link></p>
+      <p><Link to="/dashboard">Back to dashboard</Link></p>
     </div>
   );
 
@@ -452,7 +452,7 @@ function InvoiceView() {
           className="flex justify-between items-center"
           style={{ marginTop: '1rem' }}
         >
-          <Link to="/" style={{ fontSize: '0.9rem' }}>
+          <Link to="/dashboard" style={{ fontSize: '0.9rem' }}>
             Back to dashboard
           </Link>
         </div>
